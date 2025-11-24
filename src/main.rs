@@ -24,7 +24,6 @@ fn start_tcp(port: &str) -> TcpListener {
 }
 
 fn parse_packet_type(tsbuf: &[u8]) -> MessageType {
-
     match tsbuf.get(0) {
         Some(val) => {
             match tsbuf.get(18) {
@@ -41,112 +40,77 @@ fn parse_packet_type(tsbuf: &[u8]) -> MessageType {
 
 
 
-fn convert_message_to_bytes(message_header: MessageHeader) -> Vec<u8> {
-    let mut message: Vec<u8> = Vec::new();
 
-
-    for b in message_header.marker {
-        message.push(b);
-    }
-
-    match message_header.message_type {
-            // prepare fields, calculate the size, then add to vec
-            // TODO handle this better
+fn route_incomming_message_to_handler (message_type: MessageType, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) {
+    match message_type {
         MessageType::Open => {
-            let mut len: u16 = message.len() as u16;
-            len += 2;
-
-            let msg_type: u8 = 1;
-            len += 1;
-
-            let len_bytes: [u8; 2] = len.to_le_bytes();
-            let len_lo = len_bytes[0];
-            let len_hi = len_bytes[1];
-    
-            message.push(len_lo); // len
-            message.push(len_hi); // len p2
-
-            message.push(msg_type); // type
-
+            handle_open_message(tcp_stream, tsbuf);
         },
         MessageType::Update => {
-            message.push(2);
+            // TODO handle_update_message
         },
         MessageType::Notification => {
-            message.push(3);
+            // TODO handle_notification_message
+            send_keepalive(tcp_stream);
         },
         MessageType::Keepalive => {
-
-            let mut len: u16 = message.len() as u16;
-            len += 2;
-
-            let msg_type: u8 = 4;
-            len += 1;
-
-            let len_bytes: [u8; 2] = len.to_le_bytes();
-            let len_lo = len_bytes[0];
-            let len_hi = len_bytes[1];
-    
-            message.push(len_lo); // len
-            message.push(len_hi); // len p2
-
-            message.push(msg_type); // type
-
+            // TODO handle_keepalive_message
         },
     }
+}
 
+fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) {
+    //TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
+    let open_message = OpenMessage::new(2, 180, Ipv4Addr::new(1,1,1,1), 0, None);
+    send_open(tcp_stream, open_message);
+    send_keepalive(tcp_stream);
+}
 
-    message
+fn send_open(stream: &mut TcpStream, message: OpenMessage) {
+    println!("Preparing to send Open");
+    let message_bytes = message.convert_to_bytes();
+    stream.write_all(&message_bytes[..]).unwrap();
+    println!("Sent Open");
+}
 
+fn handle_keepalive_message(tcp_stream: &mut TcpStream) {
+    send_keepalive(tcp_stream);
 }
 
 fn send_keepalive(stream: &mut TcpStream) {
-    let message_header = build_message_header(MessageType::Keepalive);
-    let message = convert_message_to_bytes(message_header);
-    stream.write_all(&message).unwrap();
+    //TODO add peer as input var and match against DB
+    //TODO add periodic keepalives
+    println!("Preparing to send Keepalive");
+    let message = KeepaliveMessage::new();
+    let message_bytes = message.convert_to_bytes();
+    stream.write_all(&message_bytes[..]).unwrap();
+    println!("Sent Keepalive");
 }
 
-fn send_open(stream: &mut TcpStream) {
-    let message_header = build_message_header(MessageType::Open);
-    let message = convert_message_to_bytes(message_header);
-    stream.write_all(&message).unwrap();
-}
 
 fn main() {
     let mut connection_buffers: Vec<Vec<u8>> = Vec::new();
 
     let listener = start_tcp("170");
     for stream in listener.incoming() {
-        let stream = stream;
         match stream {
             Ok(mut ts) => {
-                println!("Connection established from {}", ts.peer_addr().unwrap());
-                // TODO test printing the stream data
-                let mut tsbuf = vec![0; 64];
-                let size = ts.read(&mut tsbuf).unwrap();
-                println!("Read {} bytes from the stream. ", size);
-                let hex = tsbuf[..size]
-                    .iter()
-                    .map(|b| format!("{:02X} ", b))
-                    .collect::<String>();
-                println!("Data read from the stream: {}", hex);
-                //println!("Data read from the stream: {:#x?}", &tsbuf.get(..size).unwrap());
-                let message_type = parse_packet_type(&tsbuf[..size]);
-                println!("Message type is: {:?}", message_type);
+                println!("TCP connection established from {}", ts.peer_addr().unwrap());
+                loop {
+                    let mut tsbuf: Vec<u8> = vec![0; 64];
+                    let size = ts.read(&mut tsbuf[..]).unwrap();
+                    println!("Read {} bytes from the stream. ", size);
+                    let hex = tsbuf[..size]
+                        .iter()
+                        .map(|b| format!("{:02X} ", b))
+                        .collect::<String>();
+                    println!("Data read from the stream: {}", hex);
+                    //println!("Data read from the stream: {:#x?}", &tsbuf.get(..size).unwrap());
+                    let message_type = parse_packet_type(&tsbuf[..size]);
+                    println!("Message type is: {:?}", message_type);
+                    route_incomming_message_to_handler(message_type, &mut ts, &tsbuf);
+                }
 
-                let message_header = build_message_header(MessageType::Open);
-                let open_message = OpenMessage {
-                    message_header,
-                    version: BGPVersion::V4,
-                    as_number: 1,
-                    hold_time: 60,
-                    identifier: Ipv4Addr::new(1, 1, 1, 1),
-                    optional_parameters_length: 0,
-                    optional_parameters: None
-                };
-                send_open(&mut ts);
-                send_keepalive(&mut ts);
-                println!("Sent keepalive");
                // connection_buffers.push(tsbuf);
 
             },
