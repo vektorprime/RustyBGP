@@ -4,18 +4,28 @@ use std::io::{Read, Write};
 use crate::messages::header::*;
 use crate::messages::*;
 
-pub fn handle_keepalive_message(tcp_stream: &mut TcpStream) {
-    send_keepalive(tcp_stream);
+pub fn handle_keepalive_message(tcp_stream: &mut TcpStream) -> Result<(), MessageError> {
+    send_keepalive(tcp_stream)?;
+    Ok(())
 }
 
-pub fn send_keepalive(stream: &mut TcpStream) {
+pub fn send_keepalive(stream: &mut TcpStream) -> Result<(), MessageError> {
     //TODO add peer as input var and match against DB
     //TODO add periodic keepalives
     println!("Preparing to send Keepalive");
     let message = KeepaliveMessage::new();
     let message_bytes = message.convert_to_bytes();
-    stream.write_all(&message_bytes[..]).unwrap();
-    println!("Sent Keepalive");
+    let ts = stream.write_all(&message_bytes[..]);
+    match ts {
+        Ok(_) => {
+            println!("Sent Keepalive");
+            Ok(())
+        },
+        Err(_) => {
+            Err(MessageError::UnableToWriteToTCPStream)
+        }
+    }
+
 }
 
 #[derive(PartialEq, Debug)]

@@ -4,12 +4,28 @@ use std::io::{Read, Write};
 use crate::messages::header::*;
 use crate::messages::*;
 
-pub fn handle_route_refresh_message(tcp_stream: &mut TcpStream) {
+pub fn handle_route_refresh_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) -> Result<(), MessageError> {
     //send_route_refresh(tcp_stream);
     println!("Handling route refresh message");
     // TODO handle route refresh
+    match tsbuf.get(19..21) {
+        Some(ts) => {
+            let afi = u16::from_be_bytes(ts[0..2].try_into().map_err(|e| MessageError::BadIntRead)?);
+            if afi == 1 {
+                println!("Received route refresh for IPv4 AFI");
+            }
+            else if afi == 1 {
+                println!("Received route refresh for IPv4 AFI");
+            }
+        },
+        None => {
+            println!("No AFI found in route refresh message");
+            return Err(MessageError::RouteRefreshMissingAFI)
+        }
+    }
     // readv the adj rib out for the afi, safi pair
     println!("Handled route refresh message");
+    Ok(())
 }
 
 pub fn send_route_refresh(stream: &mut TcpStream, afi: AddressFamily, safi: SAFI) {

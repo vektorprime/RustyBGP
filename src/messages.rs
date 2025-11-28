@@ -11,7 +11,7 @@ use keepalive::*;
 use open::*;
 use header::*;
 use update::*;
-use crate::errors::MessageError;
+use crate::errors::{BGPError, MessageError};
 use crate::messages::route_refresh::handle_route_refresh_message;
 // pub enum Message {
 //     Open,
@@ -68,26 +68,31 @@ pub struct OptionalParameter {
     parameter_value: Vec<u8>, //variable length
 }
 
-pub fn parse_packet_type(tsbuf: &Vec<u8>) -> MessageType {
+pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, MessageError> {
     // TODO gracefully exit without panic
-    match tsbuf.get(0) {
+    match tsbuf.get(0..16) {
         Some(val) => {
-            match tsbuf.get(18) {
-                Some(1) => MessageType::Open,
-                Some(2) => MessageType::Update,
-                Some(3) => MessageType::Notification,
-                Some(4) => MessageType::Keepalive,
-                Some(5) => MessageType::RouteRefresh,
-                _ => panic!("Unknown MessageType in parse_packet_type")
+            if val == [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF ] {
+                match tsbuf.get(18) {
+                    Some(1) => Ok(MessageType::Open),
+                    Some(2) => Ok(MessageType::Update),
+                    Some(3) => Ok(MessageType::Notification),
+                    Some(4) => Ok(MessageType::Keepalive),
+                    Some(5) => Ok(MessageType::RouteRefresh),
+                    _ => Err(MessageError::UnknownMessageType)
+                }
             }
+            else {
+                Err(MessageError::NoMarkerFound)
+            }
+
         }
-        None => panic!("Unable to read first byte of buffer in parse_packet_type")
+        None => Err(MessageError::BufferEmpty)
     }
 }
 
 pub fn locate_marker_in_message(tsbuf: &Vec<u8>, migrated_data_len: usize) -> Result<(), MessageError> {
-
-
     for i in migrated_data_len + 0..migrated_data_len + 16 {
         if let Some(b) = tsbuf.get(i) {
             if *b != 0xFF {
@@ -110,16 +115,18 @@ pub fn extract_messages_from_rec_data(tsbuf: &Vec<u8>) -> Result<Vec<Vec<u8>>, M
     let mut messages: Vec<Vec<u8>> = Vec::new();
 
     let data_len = tsbuf.len();
-    let migrated_data_len: usize = 0;
+    let mut migrated_data_len: usize = 0;
     println!("Total message size from TCP is: {}", data_len);
     loop {
         locate_marker_in_message(tsbuf, migrated_data_len)?;
         println!("Found marker in message");
 
-        let message_len = u8::from_be_bytes(tsbuf[migrated_data_len + 16..migrated_data_len + 17].try_into().unwrap());
+        let message_len = u16::from_be_bytes(tsbuf[migrated_data_len + 16..migrated_data_len + 18].try_into().map_err(|e| MessageError::BadIntRead)?);
         println!("Found message length: {}", message_len);
 
-        messages.push(Vec::from(&tsbuf[0..message_len as usize]));
+        messages.push(Vec::from(&tsbuf[migrated_data_len..message_len as usize]));
+
+        migrated_data_len += data_len;
 
         if migrated_data_len == data_len {
             break;
@@ -131,25 +138,27 @@ pub fn extract_messages_from_rec_data(tsbuf: &Vec<u8>) -> Result<Vec<Vec<u8>>, M
     Ok(messages)
 }
 
-pub fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) {
-    let message_type = parse_packet_type(&tsbuf);
+pub fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) -> Result<(), BGPError> {
+    let message_type = parse_packet_type(&tsbuf)?;
     println!("Message type is: {:?}", message_type);
     match message_type {
         MessageType::Open => {
-            handle_open_message(tcp_stream, tsbuf);
+            handle_open_message(tcp_stream, tsbuf)?
         },
         MessageType::Update => {
-          // handle_update_message(tcp_stream, tsbuf);
+            // handle_update_message(tcp_stream, tsbuf);
         },
         MessageType::Notification => {
             // TODO handle_notification_message
         },
         MessageType::Keepalive => {
-            handle_keepalive_message(tcp_stream);
+            handle_keepalive_message(tcp_stream)?
         },
         MessageType::RouteRefresh => {
             // TODO handle route refresh
-            handle_route_refresh_message(tcp_stream);
+            handle_route_refresh_message(tcp_stream, tsbuf)?
         }
+
     }
+    Ok(())
 }

@@ -1,6 +1,6 @@
 use std::io::Read;
 use std::net::{IpAddr, TcpListener};
-use crate::messages::{parse_packet_type, route_incomming_message_to_handler};
+use crate::messages::*;
 use crate::neighbors::*;
 
 fn start_tcp(port: &str) -> TcpListener {
@@ -50,7 +50,19 @@ impl BGPProcess {
                             .collect::<String>();
                         println!("Data read from the stream: {}", hex);
                         //println!("Data read from the stream: {:#x?}", &tsbuf.get(..size).unwrap());
-                        route_incomming_message_to_handler(&mut ts, &tsbuf);
+                        let mres = extract_messages_from_rec_data(&tsbuf);
+                        match mres {
+                            Ok(messages) => {
+                                for m in &messages {
+                                    route_incomming_message_to_handler(&mut ts, m);
+                                }
+                            },
+                            Err(e) => {
+                                continue
+                            }
+                        }
+
+
                     }
 
                     // connection_buffers.push(tsbuf);

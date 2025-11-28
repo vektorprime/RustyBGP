@@ -4,18 +4,28 @@ use std::io::{Read, Write};
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
-pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) {
+pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) -> Result<(), MessageError> {
     //TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
     let open_message = OpenMessage::new(2, 180, Ipv4Addr::new(1,1,1,1), 0, None);
-    send_open(tcp_stream, open_message);
-    send_keepalive(tcp_stream);
+    send_open(tcp_stream, open_message)?;
+    send_keepalive(tcp_stream)?;
+    Ok(())
 }
 
-pub fn send_open(stream: &mut TcpStream, message: OpenMessage) {
+pub fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(), MessageError> {
     println!("Preparing to send Open");
     let message_bytes = message.convert_to_bytes();
-    stream.write_all(&message_bytes[..]).unwrap();
-    println!("Sent Open");
+    let res  =stream.write_all(&message_bytes[..]);
+    match res {
+        Ok(_) => {
+            println!("Sent Open");
+            Ok(())
+        },
+        Err(_) => {
+            Err(MessageError::UnableToWriteToTCPStream)
+        }
+    }
+
 }
 
 
