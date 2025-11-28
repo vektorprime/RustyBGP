@@ -40,8 +40,12 @@ impl BGPProcess {
                     let neighbor = Neighbor::new(peer_ip);
                     self.neighbors.push(neighbor);
                     println!("Added neighbor {:#?}", ts.peer_addr().unwrap().ip());
+                    //let mut tsbuf: Vec<u8> = Vec::new();
+                    //tsbuf.try_reserve(65536).unwrap();
+                    let mut tsbuf: Vec<u8> = vec![0;65535];
                     loop {
-                        let mut tsbuf: Vec<u8> = vec![0; 64];
+                        // TODO handle read unwrap
+                        //read tcp stream into buf and save size read
                         let size = ts.read(&mut tsbuf[..]).unwrap();
                         println!("Read {} bytes from the stream. ", size);
                         let hex = tsbuf[..size]
@@ -50,19 +54,17 @@ impl BGPProcess {
                             .collect::<String>();
                         println!("Data read from the stream: {}", hex);
                         //println!("Data read from the stream: {:#x?}", &tsbuf.get(..size).unwrap());
-                        let mres = extract_messages_from_rec_data(&tsbuf);
-                        match mres {
+                        match extract_messages_from_rec_data(&tsbuf[..size], size) {
                             Ok(messages) => {
                                 for m in &messages {
                                     route_incomming_message_to_handler(&mut ts, m);
                                 }
                             },
                             Err(e) => {
+                                println!("Error extracting messages: {:#?}", e);
                                 continue
                             }
                         }
-
-
                     }
 
                     // connection_buffers.push(tsbuf);

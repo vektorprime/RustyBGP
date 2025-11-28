@@ -1,5 +1,6 @@
 use std::net::{ Ipv4Addr, TcpListener, TcpStream};
 use std::io::{Read, Write};
+use std::fmt;
 
 pub mod keepalive;
 pub mod open;
@@ -26,6 +27,8 @@ pub enum AddressFamily {
     IPv6,
 }
 
+
+
 #[derive(PartialEq, Debug)]
 pub enum MessageType {
     Open,
@@ -33,6 +36,19 @@ pub enum MessageType {
     Notification,
     Keepalive,
     RouteRefresh
+}
+
+impl fmt::Display for MessageType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            MessageType::Open => write!(f, "Message type is Open"),
+            MessageType::Update => write!(f, "Message type is Update"),
+            MessageType::Notification => write!(f, "Message type is Notification"),
+            MessageType::Keepalive => write!(f, "Message type is Keepalive"),
+            MessageType::RouteRefresh => write!(f, "Message type is RouteRefresh")
+        }
+
+    }
 }
 
 impl MessageType {
@@ -50,6 +66,15 @@ impl MessageType {
 #[derive(PartialEq, Debug)]
 pub enum BGPVersion {
     V4
+}
+
+impl fmt::Display for BGPVersion  {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            BGPVersion::V4   => write!(f, "BGP Version is 4"),
+        }
+
+    }
 }
 
 impl BGPVersion {
@@ -92,7 +117,8 @@ pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, MessageError> {
     }
 }
 
-pub fn locate_marker_in_message(tsbuf: &Vec<u8>, migrated_data_len: usize) -> Result<(), MessageError> {
+pub fn locate_marker_in_message(tsbuf: &[u8], migrated_data_len: usize) -> Result<(), MessageError> {
+
     for i in migrated_data_len + 0..migrated_data_len + 16 {
         if let Some(b) = tsbuf.get(i) {
             if *b != 0xFF {
@@ -100,47 +126,65 @@ pub fn locate_marker_in_message(tsbuf: &Vec<u8>, migrated_data_len: usize) -> Re
             }
         }
     }
-
+    //println!("Found marker in message");
     Ok(())
 }
 
-pub fn extract_messages_from_rec_data(tsbuf: &Vec<u8>) -> Result<Vec<Vec<u8>>, MessageError> {
+pub fn locate_markers_indexes_in_message(tsbuf: &[u8]) -> Result<(Vec<usize>), MessageError> {
+    // find all the Markers (16x 0xFF) and note their starting indexes in the vec
+    let mut markers_found = Vec::new();
+    let bytes_to_find: [u8; 16] = [ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    for (i, b) in tsbuf.iter().enumerate() {
+        if *b == 0xFF {
+            if i + 16 <tsbuf.len() {
+                if tsbuf[i..i + 16] == bytes_to_find {
+                    markers_found.push(i);
+                }
+            }
+
+        }
+    }
+    if markers_found.len() == 0 {
+        return Err(MessageError::NoMarkerFound)
+    }
+
+    Ok(markers_found)
+    //println!("Found marker in message");
+}
+
+pub fn extract_messages_from_rec_data(tsbuf: &[u8], data_len: usize) -> Result<Vec<Vec<u8>>, MessageError> {
     // multiple messages may be contained in one tcp stream
     // all the messages are separated by marker and len
-    //
+
     // validate first 16 bytes are 0xFF
     // split the buffer per message
     // get len and advance to next marker
 
     let mut messages: Vec<Vec<u8>> = Vec::new();
-
-    let data_len = tsbuf.len();
-    let mut migrated_data_len: usize = 0;
-    println!("Total message size from TCP is: {}", data_len);
+    //println!("Total message size from TCP is: {}", data_len);
     loop {
-        locate_marker_in_message(tsbuf, migrated_data_len)?;
-        println!("Found marker in message");
+        //locate_marker_in_message(tsbuf, migrated_data_len)?;
+        let markers_indexes = locate_markers_indexes_in_message(tsbuf)?;
+        for index in markers_indexes {
+            let message_len =  match tsbuf.get(index +16..index + 18) {
+                Some(bytes) => {
+                    u16::from_be_bytes(bytes.try_into().map_err(|_| MessageError::BadIntRead)?)
+                },
+                None => { continue }
+            };
+            println!("Found message length: {}", message_len);
 
-        let message_len = u16::from_be_bytes(tsbuf[migrated_data_len + 16..migrated_data_len + 18].try_into().map_err(|e| MessageError::BadIntRead)?);
-        println!("Found message length: {}", message_len);
-
-        messages.push(Vec::from(&tsbuf[migrated_data_len..message_len as usize]));
-
-        migrated_data_len += data_len;
-
-        if migrated_data_len == data_len {
-            break;
+            messages.push(Vec::from(&tsbuf[index..index + message_len as usize]));
         }
+        break;
     }
-
-
-
+    
     Ok(messages)
 }
 
 pub fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) -> Result<(), BGPError> {
     let message_type = parse_packet_type(&tsbuf)?;
-    println!("Message type is: {:?}", message_type);
+    println!("{}", message_type);
     match message_type {
         MessageType::Open => {
             handle_open_message(tcp_stream, tsbuf)?

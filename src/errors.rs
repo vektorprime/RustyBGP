@@ -13,7 +13,8 @@ pub enum MessageError {
     UnknownMessageType,
     UnableToWriteToTCPStream,
     RouteRefreshMissingAFI,
-    BadIntRead
+    BadIntRead,
+    InvalidBufferIndex
 }
 
 #[derive(PartialEq, Debug)]

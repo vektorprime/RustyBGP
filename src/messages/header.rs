@@ -8,6 +8,12 @@ pub struct MessageHeader {
     pub message_type: MessageType, // 1-4 open, update, notification, keepalive
 }
 
+impl fmt::Display for MessageHeader  {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+       write!(f, "MessageHeader marker is 16 bytes of {:?},
+        length is {}, MessageType is {}", self.marker, self.length, self.message_type)
+    }
+}
 
 
 pub fn build_message_header(message_type: MessageType) -> MessageHeader {
