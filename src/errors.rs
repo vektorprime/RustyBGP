@@ -21,7 +21,8 @@ pub enum MessageError {
     BadInt16Read,
     BadInt32Read,
     InvalidBufferIndex,
-    BadBGPVersion
+    BadBGPVersion,
+
 }
 
 #[derive(PartialEq, Debug)]
