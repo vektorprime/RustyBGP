@@ -14,9 +14,10 @@ mod finite_state_machine;
 mod process;
 mod timers;
 mod errors;
+mod config;
 
 fn main() {
-    let mut bgp = BGPProcess::new();
+    let mut bgp = BGPProcess::new("bgp_config.toml".to_string());
     bgp.run();
 }
 

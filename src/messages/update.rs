@@ -4,6 +4,8 @@ use std::io::{Read, Write};
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
+use crate::utils::{extract_u16_from_bytes, extract_u32_from_bytes};
+
 pub fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) {
     println!("handling update message");
     
@@ -159,7 +161,32 @@ pub struct UpdateMessage {
     pub path_attributes: Option<Vec<PathAttribute>>
 }
 
+pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageError> {
+    // TODO I only copied this, I have not modified it yet
+    let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
 
+    let withdrawn_route_len = extract_u16_from_bytes(tsbuf, 19, 21)?;
+
+    let withdrawn_routes = if withdrawn_route_len != 0 {
+        
+    } else {
+        None
+    };
+
+    let message_header = MessageHeader::new(MessageType::Update, Some(message_len));
+
+    let as_number = extract_u16_from_bytes(tsbuf, 20, 22)?;
+
+    let hold_time = extract_u16_from_bytes(tsbuf, 22, 24)?;
+
+    let identifier = Ipv4Addr::from_bits(extract_u32_from_bytes(tsbuf, 30, 34)?);
+
+    // TODO read and process the optional params
+    let update_message = UpdateMessage::new();
+
+    Ok(update_message)
+
+}
 
 impl UpdateMessage {
     // pub fn new(as_number: u16, hold_time: u16, identifier: Ipv4Addr, optional_parameters_length: u8, optional_parameters: Option<Vec<OptionalParameter>> ) -> Self {

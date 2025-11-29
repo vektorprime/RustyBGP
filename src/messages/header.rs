@@ -15,19 +15,25 @@ impl fmt::Display for MessageHeader  {
     }
 }
 
+impl MessageHeader {
+    pub fn new(message_type: MessageType, len: Option<u16>) -> MessageHeader {
+        let marker: [u8; 16] = [0xFF; 16];
+        let length = match len {
+            Some(l) => l,
+            None => {
+                match message_type {
+                    MessageType::Keepalive => 19,
+                    MessageType::Open => 29,
+                    MessageType::Update => 23,
+                    _ => 19, // default length for other types of messages
+                }
+            }
+        };
 
-pub fn build_message_header(message_type: MessageType) -> MessageHeader {
-    let marker: [u8; 16] = [0xFF; 16];
-    let length: u16 = match message_type {
-        MessageType::Keepalive => 19,
-        MessageType::Open => 29,
-        MessageType::Update => 23,
-        _ => 19, // default length for other types of messages
-    };
-
-    MessageHeader {
-        marker,
-        length,
-        message_type
+        MessageHeader {
+            marker,
+            length,
+            message_type
+        }
     }
 }

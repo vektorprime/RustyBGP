@@ -1,5 +1,5 @@
-use std::net::{ Ipv4Addr, TcpListener, TcpStream};
-use std::io::{Read, Write};
+use std::net::{ TcpStream};
+
 use std::fmt;
 
 pub mod keepalive;
@@ -10,10 +10,11 @@ mod route_refresh;
 
 use keepalive::*;
 use open::*;
-use header::*;
+
 use update::*;
 use crate::errors::{BGPError, MessageError};
 use crate::messages::route_refresh::handle_route_refresh_message;
+use crate::process::BGPProcess;
 // pub enum Message {
 //     Open,
 //     Update,
@@ -83,6 +84,13 @@ impl BGPVersion {
             BGPVersion::V4 => 4,
         }
     }
+
+    pub fn from_u8(byte: u8) -> Self {
+        match byte {
+            4 => BGPVersion::V4,
+            _ => {panic!("Only BGP Version 4 is supported")}
+        }
+    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -136,7 +144,7 @@ pub fn locate_markers_indexes_in_message(tsbuf: &[u8]) -> Result<(Vec<usize>), M
     let bytes_to_find: [u8; 16] = [ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
     for (i, b) in tsbuf.iter().enumerate() {
         if *b == 0xFF {
-            if i + 16 <tsbuf.len() {
+            if i + 16 < tsbuf.len() {
                 if tsbuf[i..i + 16] == bytes_to_find {
                     markers_found.push(i);
                 }
@@ -152,7 +160,7 @@ pub fn locate_markers_indexes_in_message(tsbuf: &[u8]) -> Result<(Vec<usize>), M
     //println!("Found marker in message");
 }
 
-pub fn extract_messages_from_rec_data(tsbuf: &[u8], data_len: usize) -> Result<Vec<Vec<u8>>, MessageError> {
+pub fn extract_messages_from_rec_data(tsbuf: &[u8]) -> Result<Vec<Vec<u8>>, MessageError> {
     // multiple messages may be contained in one tcp stream
     // all the messages are separated by marker and len
 
@@ -168,26 +176,27 @@ pub fn extract_messages_from_rec_data(tsbuf: &[u8], data_len: usize) -> Result<V
         for index in markers_indexes {
             let message_len =  match tsbuf.get(index +16..index + 18) {
                 Some(bytes) => {
-                    u16::from_be_bytes(bytes.try_into().map_err(|_| MessageError::BadIntRead)?)
+                    u16::from_be_bytes(bytes.try_into().map_err(|_| MessageError::BadInt16Read)?)
                 },
                 None => { continue }
             };
+
             println!("Found message length: {}", message_len);
 
             messages.push(Vec::from(&tsbuf[index..index + message_len as usize]));
         }
         break;
     }
-    
+
     Ok(messages)
 }
 
-pub fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) -> Result<(), BGPError> {
+pub fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
     let message_type = parse_packet_type(&tsbuf)?;
     println!("{}", message_type);
     match message_type {
         MessageType::Open => {
-            handle_open_message(tcp_stream, tsbuf)?
+            handle_open_message(tcp_stream, tsbuf, bgp_proc)?
         },
         MessageType::Update => {
             // handle_update_message(tcp_stream, tsbuf);
@@ -206,3 +215,4 @@ pub fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Ve
     }
     Ok(())
 }
+

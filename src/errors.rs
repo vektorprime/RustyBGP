@@ -1,8 +1,12 @@
 
+
 #[derive(PartialEq, Debug)]
 pub enum NeighborError {
     KeepaliveGreaterThanHoldTime,
     KeepaliveEqualToHoldTime,
+    PeerIPNotRecognized,
+    NeighborIsIPV6,
+    ConfiguredNeighborsEmpty,
 }
 
 #[derive(PartialEq, Debug)]
@@ -13,8 +17,11 @@ pub enum MessageError {
     UnknownMessageType,
     UnableToWriteToTCPStream,
     RouteRefreshMissingAFI,
-    BadIntRead,
-    InvalidBufferIndex
+    BadInt8Read,
+    BadInt16Read,
+    BadInt32Read,
+    InvalidBufferIndex,
+    BadBGPVersion
 }
 
 #[derive(PartialEq, Debug)]

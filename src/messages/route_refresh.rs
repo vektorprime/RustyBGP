@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 
 use crate::messages::header::*;
 use crate::messages::*;
+use crate::utils::extract_u16_from_bytes;
 
 pub fn handle_route_refresh_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) -> Result<(), MessageError> {
     //send_route_refresh(tcp_stream);
@@ -10,7 +11,7 @@ pub fn handle_route_refresh_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>)
     // TODO handle route refresh
     match tsbuf.get(19..21) {
         Some(ts) => {
-            let afi = u16::from_be_bytes(ts[0..2].try_into().map_err(|e| MessageError::BadIntRead)?);
+            let afi = extract_u16_from_bytes(tsbuf, 0, 2)?;
             if afi == 1 {
                 println!("Received route refresh for IPv4 AFI");
             }
@@ -55,7 +56,8 @@ pub struct RouteRefreshMessage {
 
 impl RouteRefreshMessage {
     pub fn new(afi: AddressFamily, safi: SAFI) -> Self {
-        let message_header = build_message_header(MessageType::RouteRefresh);
+        // Route refresh is always 23 bytes
+        let message_header = MessageHeader::new(MessageType::RouteRefresh, Some(23));
         RouteRefreshMessage {
             message_header,
             afi,
@@ -64,18 +66,14 @@ impl RouteRefreshMessage {
     }
 
     pub fn convert_to_bytes(&self) -> Vec<u8> {
-        let mut message: Vec<u8> = Vec::new();
-
-        let message_header = build_message_header(MessageType::RouteRefresh);
-
-        for b in message_header.marker {
-            message.push(b);
-        }
+        let mut message: Vec<u8> = vec![0xFF; 16];
 
         let mut len: u16 = message.len() as u16;
         len += 2;
 
-        let msg_type: u8 = message_header.message_type.to_u8();
+        let message_type = MessageType::RouteRefresh;
+
+        let msg_type: u8 = message_type.to_u8();
         len += 1;
 
         // adding len to the vec must come second to last because we need the total len of the payload

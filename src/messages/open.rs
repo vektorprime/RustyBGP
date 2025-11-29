@@ -1,16 +1,70 @@
-use std::net::{ Ipv4Addr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
 use std::io::{Read, Write};
-
+use crate::errors::*;
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
-pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) -> Result<(), MessageError> {
-    //TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
-    let open_message = OpenMessage::new(2, 180, Ipv4Addr::new(1,1,1,1), 0, None);
-    send_open(tcp_stream, open_message)?;
-    send_keepalive(tcp_stream)?;
-    Ok(())
+use crate::neighbors::Neighbor;
+use crate::utils::*;
+
+
+pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError> {
+    // doesn't make sense to save the len in the messsage header here because it should be calculated in the Message::new()
+    // let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
+    //
+    // let mut message_header = MessageHeader::new(MessageType::Open, message_len);
+    // message_header.length = message_len;
+
+    let version = match tsbuf.get(19) {
+        Some(byte) => { BGPVersion::from_u8(byte.clone())},
+        None => { return Err(MessageError::BadBGPVersion) }
+    };
+
+    let as_number = extract_u16_from_bytes(tsbuf, 20, 22)?;
+
+    let hold_time = extract_u16_from_bytes(tsbuf, 22, 24)?;
+
+    let identifier = Ipv4Addr::from_bits(extract_u32_from_bytes(tsbuf, 30, 34)?);
+
+    // TODO read and process the optional params
+    let open_message = OpenMessage::new(as_number, hold_time, identifier, 0, None);
+
+    Ok(open_message)
+
 }
+
+
+pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut OpenMessage, peer_ip: IpAddr, hello_time: u16, my_hold_time: u16) -> Result<(usize), MessageError> {
+    let hold_time = if my_hold_time <= open_message.hold_time {
+        my_hold_time
+    } else {
+        open_message.hold_time
+    };
+    let neighbor = Neighbor::new(peer_ip, AS::AS2(open_message.as_number), hello_time, hold_time);
+    let index = bgp_proc.active_neighbors.len();
+    bgp_proc.active_neighbors.push(neighbor);
+    Ok(index)
+}
+pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+    // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
+    // compare the open message params to configured neighbor
+    let mut received_open = extract_open_message(tsbuf)?;
+    for cn in &bgp_proc.configured_neighbors {
+        // neighbor IP is already checked in previous funcs so it has to be in the list
+        let peer_ip = tcp_stream.peer_addr().unwrap().ip();
+        if peer_ip.to_string() == cn.ip {
+            add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
+            let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors[0].hello_time, bgp_proc.identifier, 0, None);
+            send_open(tcp_stream, open_message)?;
+            send_keepalive(tcp_stream)?;
+            return Ok(())
+        }
+    }
+    return Err(NeighborError::PeerIPNotRecognized.into())
+}
+
+    // Ok(())
+
 
 pub fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(), MessageError> {
     println!("Preparing to send Open");
@@ -44,7 +98,9 @@ pub struct OpenMessage {
 
 impl OpenMessage {
     pub fn new(as_number: u16, hold_time: u16, identifier: Ipv4Addr, optional_parameters_length: u8, optional_parameters: Option<Vec<OptionalParameter>> ) -> Self {
-        let message_header = build_message_header(MessageType::Open);
+        // 28 bytes base without params
+        let message_header_len_field = 28 + optional_parameters_length as u16;
+        let message_header = MessageHeader::new(MessageType::Open, Some(message_header_len_field));
         OpenMessage {
             message_header,
             version: BGPVersion::V4,
@@ -56,16 +112,25 @@ impl OpenMessage {
         }
     }
     pub fn convert_to_bytes(&self) -> Vec<u8> {
-        let message_header = build_message_header(MessageType::Open);
-        let mut message: Vec<u8> = Vec::new();
+        //let message_header_len_field = 28 + optional_parameters_length as u16;
+        //let message_header = MessageHeader::new(MessageType::Open, Some(message_header_len_field));
+       // let message_header_marker: [u8; 16] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        //let message_header = build_message_header(MessageType::Open);
+
+        //let mut message: Vec<u8> = Vec::new();
+
+        // for b in message_header_marker {
+        //     message.push(b);
+        // }
+
+        let mut message: Vec<u8> = vec![0xFF; 16];
         // marker
-        for b in message_header.marker {
-            message.push(b);
-        }
         let mut len: u16 = message.len() as u16;
         len += 2;
 
-        let msg_type: u8 = message_header.message_type.to_u8();
+        let message_type = MessageType::Open;
+
+        let msg_type: u8 = message_type.to_u8();
         len += 1;
 
         let ver = self.version.to_u8();
