@@ -199,7 +199,7 @@ pub fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Ve
             handle_open_message(tcp_stream, tsbuf, bgp_proc)?
         },
         MessageType::Update => {
-            // handle_update_message(tcp_stream, tsbuf);
+            handle_update_message(tcp_stream, tsbuf, bgp_proc)?
         },
         MessageType::Notification => {
             // TODO handle_notification_message

@@ -1,4 +1,4 @@
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum FSM {
     #[default] Idle,
     Connect,

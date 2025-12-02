@@ -1,4 +1,4 @@
-
+use crate::errors::BGPError::Message;
 
 #[derive(PartialEq, Debug)]
 pub enum NeighborError {
@@ -7,6 +7,8 @@ pub enum NeighborError {
     PeerIPNotRecognized,
     NeighborIsIPV6,
     ConfiguredNeighborsEmpty,
+    PeerIPNotEstablished,
+    Message(MessageError)
 }
 
 #[derive(PartialEq, Debug)]
@@ -22,7 +24,8 @@ pub enum MessageError {
     BadInt32Read,
     InvalidBufferIndex,
     BadBGPVersion,
-
+    PeerIPNotEstablished,
+    MissingNLRI
 }
 
 #[derive(PartialEq, Debug)]
@@ -40,4 +43,9 @@ impl From<MessageError> for BGPError {
     fn from(e: MessageError) -> BGPError {
         BGPError::Message(e)
     }
+}
+
+
+impl From<MessageError> for NeighborError {
+    fn from(e: MessageError) -> NeighborError {NeighborError::Message(e)}
 }

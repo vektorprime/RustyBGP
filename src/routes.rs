@@ -1,11 +1,14 @@
 use std::net::Ipv4Addr;
 use crate::messages::update::*;
+
+#[derive(Debug)]
 pub enum RouteCast {
     Unicast,
     Multicast,
 }
 
 
+#[derive(Debug)]
 pub struct RouteV4 {
     //route_cast: RouteCast,
     // TODO validate prefix len

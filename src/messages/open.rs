@@ -34,7 +34,7 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
 }
 
 
-pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut OpenMessage, peer_ip: IpAddr, hello_time: u16, my_hold_time: u16) -> Result<(usize), MessageError> {
+pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut OpenMessage, peer_ip: Ipv4Addr, hello_time: u16, my_hold_time: u16) -> Result<(usize), MessageError> {
     let hold_time = if my_hold_time <= open_message.hold_time {
         my_hold_time
     } else {
@@ -42,23 +42,32 @@ pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut O
     };
     let neighbor = Neighbor::new(peer_ip, AS::AS2(open_message.as_number), hello_time, hold_time);
     let index = bgp_proc.active_neighbors.len();
-    bgp_proc.active_neighbors.push(neighbor);
+    //bgp_proc.active_neighbors.push(neighbor);
+    bgp_proc.active_neighbors.insert(peer_ip, neighbor);
     Ok(index)
 }
+
 pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
     // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
     // compare the open message params to configured neighbor
     let mut received_open = extract_open_message(tsbuf)?;
+    let peer_ip = match tcp_stream.peer_addr().unwrap().ip() {
+        IpAddr::V4(ip) => ip,
+        _ => { return Err(NeighborError::NeighborIsIPV6.into())}
+    };
+
     for cn in &bgp_proc.configured_neighbors {
         // neighbor IP is already checked in previous funcs so it has to be in the list
-        let peer_ip = tcp_stream.peer_addr().unwrap().ip();
+
         if peer_ip.to_string() == cn.ip {
             add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
-            let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors[0].hello_time, bgp_proc.identifier, 0, None);
+            // TODO handle opt params
+            let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hello_time, bgp_proc.identifier, 0, None);
             send_open(tcp_stream, open_message)?;
             send_keepalive(tcp_stream)?;
             return Ok(())
         }
+
     }
     return Err(NeighborError::PeerIPNotRecognized.into())
 }

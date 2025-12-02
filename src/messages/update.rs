@@ -1,15 +1,36 @@
 use std::net::{ Ipv4Addr, IpAddr, TcpListener, TcpStream};
-use std::io::{Read, Write};
-
+use std::io::{Bytes, Read, Write};
+use std::thread::current;
+use crate::errors::NeighborError;
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
+use crate::neighbors::Neighbor;
 use crate::routes::RouteV4;
 use crate::utils::{extract_u16_from_bytes, extract_u32_from_bytes, extract_u8_from_byte};
 
-pub fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) {
+pub fn validate_neighbor_is_established(ts: &TcpStream, bgp_proc: &BGPProcess) -> Result<Ipv4Addr, NeighborError> {
+    match ts.peer_addr().unwrap().ip() {
+        IpAddr::V4(ip) => {
+            bgp_proc.active_neighbors.get(&ip).ok_or_else(|| NeighborError::PeerIPNotEstablished)?;
+            println!("Validated neighbor is established");
+            return Ok(ip);
+
+        },
+        _ => {
+            Err(NeighborError::PeerIPNotEstablished)
+        }
+    }
+}
+
+
+pub fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), NeighborError> {
     println!("handling update message");
-    
+    let ip = validate_neighbor_is_established(tcp_stream, bgp_proc)?;
+    let update_message = extract_update_message(tsbuf)?;
+    let mut neighbor = bgp_proc.active_neighbors.get_mut(&ip).unwrap();
+    neighbor.process_routes_from_message(update_message)?;
+    Ok(())
 }
 
 pub fn send_update(stream: &mut TcpStream, message: UpdateMessage) {
@@ -23,7 +44,7 @@ pub fn send_update(stream: &mut TcpStream, message: UpdateMessage) {
 pub struct NLRI {
     len: u8,
     // TODO handle bigger prefixes and padding/trailing bits so that this falls on a byte boundary
-    prefix: u32
+    prefix: Ipv4Addr
 }
 
 // #[derive(PartialEq, Debug)]
@@ -80,7 +101,7 @@ impl Flags {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum TypeCode {
     Origin,
     AsPath,
@@ -94,13 +115,14 @@ pub enum TypeCode {
 impl TypeCode {
     pub fn from_u8(val: u8) -> Self {
         match val {
-            0 => TypeCode::Origin,
-            1 => TypeCode::AsPath,
-            2 => TypeCode::NextHop,
-            3 => TypeCode::MultiExitDisc,
-            4 => TypeCode::LocalPref,
-            5 => TypeCode::AtomicAggregate,
-            6 => TypeCode::Aggregator,
+            // 0 is reserved
+            1 => TypeCode::Origin,
+            2 => TypeCode::AsPath,
+            3 => TypeCode::NextHop,
+            4 => TypeCode::MultiExitDisc,
+            5 => TypeCode::LocalPref,
+            6 => TypeCode::AtomicAggregate,
+            7 => TypeCode::Aggregator,
             _ => unreachable!()
         }
     }
@@ -213,16 +235,44 @@ pub struct NextHop {
     ipv4addr: Ipv4Addr,
 }
 
+impl NextHop {
+    pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
+        NextHop {
+            category: Category::WellKnownMandatory,
+            ipv4addr: Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]),
+        }
+    }
+}
+
+
 #[derive(PartialEq, Debug)]
 pub struct MultiExitDisc {
     category: Category,
     value: u32, // 4 bytes
 }
 
+impl MultiExitDisc {
+    pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
+        MultiExitDisc {
+            category: Category::OptionalNonTransitive,
+            value: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
+        }
+    }
+}
+
 #[derive(PartialEq, Debug)]
 pub struct LocalPref {
     category: Category,
     value: u32, // 4 bytes
+}
+
+impl LocalPref {
+    pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
+        LocalPref {
+            category: Category::WellKnownDiscretionary,
+            value: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
+        }
+    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -238,9 +288,8 @@ pub struct Aggregator {
     ipv4addr: Ipv4Addr
 }
 
-
 #[derive(PartialEq, Debug)]
-pub enum Data {
+pub enum PAdata {
     Origin(Origin),
     AsPath(AsPath),
     NextHop(NextHop),
@@ -250,15 +299,46 @@ pub enum Data {
     Aggregator(Aggregator)
 }
 
-impl Data {
-    pub fn from_vec_u8(type_code: &TypeCode, bytes: &Vec<u8>) -> Self{
-        match type_code {
+// pub fn extract_num_of_paths_from_data(bytes: &Vec<u8>) -> u8 {
+//     for i in 0..bytes.len() {
+//
+//     }
+// }
+
+// pub fn extract_path_attributes_from_data(bytes: &Vec<u8>, total_path_att_len: u16) -> Vec<PAdata> {
+//     let num_of_atts = extract_num_of_paths_from_data(bytes);
+//
+//     let pa_data = Vec::new();
+//     for i in 0..num_of_atts {
+//         //PAdata::from_vec_u8
+//     }
+//
+//
+//     pa_data
+// }
+
+
+impl PAdata {
+    pub fn from_vec_u8(type_code: &TypeCode, bytes: &Vec<u8>) -> Self {
+        match *type_code {
             TypeCode::Origin => {
-                Data::Origin(Origin::from_u8(bytes[0]))
+                PAdata::Origin(Origin::from_u8(bytes[0]))
             },
             TypeCode::AsPath => {
-                Data::AsPath(AsPath::from_vec_u8(bytes))
+                PAdata::AsPath(AsPath::from_vec_u8(bytes))
             },
+            TypeCode::NextHop => {
+                PAdata::NextHop(NextHop::from_vec_u8(bytes))
+            },
+            TypeCode::MultiExitDisc => {
+                PAdata::MultiExitDisc(MultiExitDisc::from_vec_u8(bytes))
+            },
+            TypeCode::LocalPref => {
+                PAdata::LocalPref(LocalPref::from_vec_u8(bytes))
+            },
+            tc => {
+                panic!("Unimplemented patype code {:?}", tc);
+            }
         }
     }
 }
@@ -268,7 +348,19 @@ pub struct PathAttribute {
     flags: Flags,
     type_code: TypeCode,
     len: u8,
-    data: Vec<Data>
+    data: PAdata
+}
+
+impl PathAttribute {
+    pub fn new(flags: Flags, type_code: TypeCode, len: u8, data: PAdata) -> Self {
+
+        PathAttribute {
+            flags,
+            type_code,
+            len,
+            data
+        }
+    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -278,7 +370,8 @@ pub struct UpdateMessage {
     pub withdrawn_route_len: u16, // size in bytes, not the number of objects
     pub withdrawn_routes: Option<Vec<NLRI>>,
     pub total_path_attribute_len: u16, // size in bytes, not the number of objects
-    pub path_attributes: Option<Vec<PathAttribute>>
+    pub path_attributes: Option<Vec<PathAttribute>>,
+    pub nlri: Option<Vec<NLRI>>
 }
 
 pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageError> {
@@ -288,76 +381,168 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
     println!("message_len: {}", message_len);
     let withdrawn_route_len = extract_u16_from_bytes(tsbuf, 19, 21)?;
     println!("withdrawn route len is : {}", withdrawn_route_len);
-
+    let mut current_idx = 0;
     let base_idx = 21;
     let route_size = 5;
     let withdrawn_routes: Option<Vec<NLRI>> = if withdrawn_route_len >= route_size {
-
+        println!("withdrawn_route_len is greater than or equal to route_size");
         let mut routes: Vec<NLRI> = Vec::new();
         for x in 0.. (withdrawn_route_len / route_size) as usize {
-            let mut current_idx = base_idx + (route_size as usize * x);
+            current_idx = base_idx + (route_size as usize * x);
+            println!("current_idx {}", current_idx);
             let prefix_len = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
+            println!("prefix_len {}", prefix_len);
             current_idx += 1;
+
             let route_u32 = extract_u32_from_bytes(tsbuf, current_idx, current_idx + route_size as usize)?;
+            println!("route_u32 {}", route_u32);
             routes.push(NLRI{
                 len: prefix_len,
-                prefix: route_u32
+                prefix: Ipv4Addr::from_bits(route_u32)
             });
+            current_idx += 4;
+            println!("current_idx {}", current_idx);
         }
         Some(routes)
     } else {
         None
     };
-    let mut pa_idx = base_idx + withdrawn_route_len as usize;
-    let total_path_attribute_len = extract_u16_from_bytes(tsbuf, pa_idx, pa_idx + 2)?;
-    pa_idx += 2;
-    // origin, aspath, next hop are the mandatory atts (24 total).
-    let path_attributes: Option<Vec<PathAttribute>> = if total_path_attribute_len >= 24 {
-        let flags = {
-            let val = extract_u8_from_byte(tsbuf, pa_idx, pa_idx + 1)?;
-            Flags::from_u8(val)
-        };
-        pa_idx += 1;
-        let type_code =  {
-            let val =  extract_u8_from_byte(tsbuf, pa_idx, pa_idx + 1)?;
-            TypeCode::from_u8(val)
-        };
-        pa_idx += 1;
-        let len = extract_u8_from_byte(tsbuf, pa_idx, pa_idx + 1)?;
-        pa_idx += 1;
-        let data = {
-            let mut bytes: Vec<u8> = Vec::new();
-            for x in 0..len as usize {
-                match tsbuf.get(pa_idx + x) {
-                    Some(byte) => { bytes.push(*byte); },
-                    None => { return Err(MessageError::InvalidBufferIndex) }
+
+    let mut current_idx = base_idx + withdrawn_route_len as usize;
+    println!("current_idx {}", current_idx);
+
+    let total_path_attribute_len = extract_u16_from_bytes(tsbuf, current_idx, current_idx + 2)?;
+    println!("total_path_attribute_len {}", total_path_attribute_len);
+    current_idx += 2;
+    println!("current_idx {}", current_idx);
+
+        // origin, aspath, next hop are the mandatory atts (24 total).
+
+    // losing the order of the PAs shouldn't matter because we process each one into an object right after finding it, so an option of vec is fine
+    let path_attributes: Option<Vec<PathAttribute>> = if total_path_attribute_len > 0 {
+        let mut pa_collection = Vec::new();
+        // The PAs are variable length here so we need to parse until we've read the whole msg len
+        let mut pa_idx: usize = 0;
+        while pa_idx < total_path_attribute_len as usize {
+            println!("current_idx is less than message len, extracting path attributes");
+
+            let flags = {
+                // TODO handle these errors so we continue instead of returning from the func
+                let val = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
+                Flags::from_u8(val)
+            };
+            println!("flags {:#?}", flags);
+
+            current_idx += 1;
+            pa_idx += 1;
+            println!("current_idx {}", current_idx);
+
+            let type_code = {
+                let val = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
+                TypeCode::from_u8(val)
+            };
+            println!("type_code {:#?}", type_code);
+
+            current_idx += 1;
+            pa_idx += 1;
+            println!("current_idx {}", current_idx);
+
+            let len = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
+            current_idx += 1;
+            pa_idx += 1;
+            println!("current_idx {}", current_idx);
+
+            let data_bytes = {
+                let mut bytes: Vec<u8> = Vec::new();
+                for x in 0..len as usize {
+                    match tsbuf.get(current_idx + x) {
+                        Some(byte) => { bytes.push(*byte); },
+                        None => { print!("{:#?}", MessageError::InvalidBufferIndex) } // should not return error, just pass
+                    }
                 }
+                bytes
+            };
+            println!("data_bytes {:#?}", data_bytes);
+
+            current_idx += len as usize;
+            pa_idx += len as usize;
+            println!("current_idx {}", current_idx);
+
+            // parse the bytes we just read for the PA
+            //let data = extract_path_attributes_from_data(&data_bytes, total_path_attribute_len);
+            if !data_bytes.is_empty() {
+                // extract the PAdata object from the vec of bytes and create a new PathAtrribute object to be returned
+                let pa_data = PAdata::from_vec_u8(&type_code, &data_bytes);
+                println!("pa_data is  {:#?}", pa_data);
+
+                pa_collection.push(PathAttribute::new(flags, type_code, len, pa_data));
             }
-            Data::from_vec_u8(&type_code, &bytes)
-
-        };
-
-        PathAttribute {
-            flags,
-            type_code,
-            len,
-            data
         }
+        println!("Option<Vec<PathAttribute>> has Some");
+        Some(pa_collection)
     } else {
+        println!("Option<Vec<PathAttribute>> has None");
         None
     };
 
-    /////
-
+    let nlri = extract_nlri_from_update_message(tsbuf, message_len as usize, &mut current_idx);
     // TODO read and process the optional params
-    let update_message = UpdateMessage::new(message_len, withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes );
+    let update_message = UpdateMessage::new(message_len, withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, nlri );
 
     Ok(update_message)
 
 }
 
+pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: &mut usize) -> Option<Vec<NLRI>> {
+    let route_size: usize = 5;
+    let mut nlri = Vec::new();
+    let nlri_count: usize = (message_len - *current_idx) / route_size;
+    println!("message_len is  {:#?}", message_len);
+    println!("current_idx is  {:#?}", current_idx);
+    println!("nlri_count is  {:#?}", nlri_count);
+
+    for i in 0..nlri_count {
+        let len: Option<u8> = {
+            match tsbuf.get(*current_idx) {
+                Some(l) => {
+                    *current_idx += 1;
+                    println!("Some(l) is  {:#?}", l);
+                    Some(l.clone())
+                },
+                None => None
+            }
+        };
+
+       let prefix = match tsbuf.get(*current_idx..=*current_idx + 3) {
+            Some(p) => {
+                *current_idx += 4;
+                println!("Some(p) is  {:#?}", p);
+                Some(p)
+            },
+            None => None
+        };
+        if len.is_some() && prefix.is_some() {
+            println!("creating nlri struct");
+            let rt = NLRI {
+                len: len.unwrap(),
+                //prefix: u32::from_be_bytes(prefix.unwrap().try_into().unwrap())
+                prefix: Ipv4Addr::from_bits(u32::from_be_bytes(prefix.unwrap().try_into().unwrap()))
+            };
+            println!("rt is  {:#?}", rt);
+            nlri.push(rt);
+        }
+    }
+    if nlri.is_empty() {
+        println!("returning None for NLRI vec");
+        None
+    } else {
+        println!("returning NLRI vec");
+        Some(nlri)
+    }
+}
+
 impl UpdateMessage {
-    pub fn new(message_len: u16, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>> ) -> Self {
+    pub fn new(message_len: u16, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, nlri: Option<Vec<NLRI>> ) -> Self {
         let message_header = MessageHeader::new(MessageType::Update, Some(message_len));
         UpdateMessage {
             message_header,
@@ -365,6 +550,7 @@ impl UpdateMessage {
             withdrawn_routes,
             total_path_attribute_len,
             path_attributes,
+            nlri
         }
     }
     // }

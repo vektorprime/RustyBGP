@@ -1,6 +1,8 @@
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::str::FromStr;
+use std::collections::HashMap;
+
 use crate::messages::*;
 use crate::neighbors::*;
 
@@ -24,7 +26,8 @@ fn start_tcp(port: &str) -> TcpListener {
 pub struct BGPProcess {
     pub(crate) my_as: u16,
     pub(crate) identifier: Ipv4Addr,
-    pub active_neighbors: Vec<Neighbor>,
+    //pub active_neighbors: Vec<Neighbor>,
+    pub active_neighbors: HashMap<Ipv4Addr, Neighbor>,
     pub configured_neighbors: Vec<NeighborConfig>
 }
 
@@ -35,7 +38,8 @@ impl BGPProcess {
         BGPProcess {
             my_as: config.process_config.my_as,
             identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap(),
-            active_neighbors: Vec::new(),
+            //active_neighbors: Vec::new(),
+            active_neighbors: HashMap::new(),
             configured_neighbors: config.neighbors_config
         }
     }

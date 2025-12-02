@@ -1,6 +1,7 @@
 use std::path::Component::ParentDir;
 use std::time::{Instant, Duration};
 
+#[derive(Debug)]
 pub struct Timer {
     current_time: Instant,
     max_time: u16,

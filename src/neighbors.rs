@@ -1,22 +1,27 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
+
+
 use crate::sessions::*;
 use crate::finite_state_machine::*;
 use crate::timers::*;
-use crate::messages::update::AS;
+use crate::messages::update::{UpdateMessage, AS};
 use crate::errors::*;
 use crate::routes::RouteV4;
 
+
+
+#[derive(Debug)]
 pub enum IPType {
     V4,
     V6
 }
 
 
-
+#[derive(Debug)]
 pub struct Neighbor {
     pub state: FSM,
     //ip_type: IPType,
-    pub ip: IpAddr,
+    pub ip: Ipv4Addr,
     pub as_num: AS,
     pub hello_time: u16,
     pub hold_time: Option<Timer>,
@@ -24,7 +29,24 @@ pub struct Neighbor {
 }
 
 impl Neighbor {
-    pub fn new(ip: IpAddr, as_num: AS, hello_time_sec: u16, hold_time_sec: u16) -> Neighbor {
+
+    pub fn process_routes_from_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
+
+
+        if let Some(nlri_coll) = update_message.nlri {
+            for nlri in &nlri_coll {
+                
+            }
+            Ok(())
+        }
+        else {
+            Err(MessageError::MissingNLRI)
+
+        }
+
+
+    }
+    pub fn new(ip: Ipv4Addr, as_num: AS, hello_time_sec: u16, hold_time_sec: u16) -> Neighbor {
     //pub fn new(ip: IpAddr, hold_time_sec: u16, keepalive_time_sec: u16) -> Result<Neighbor, NeighborError> {
         // if keepalive_time_sec > hold_time_sec {
         //     return Err(NeighborError::KeepaliveGreaterThanHoldTime)
