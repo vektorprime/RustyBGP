@@ -1,7 +1,7 @@
 use std::net::{ Ipv4Addr, IpAddr, TcpListener, TcpStream};
 use std::io::{Bytes, Read, Write};
 use std::thread::current;
-use crate::errors::NeighborError;
+use crate::errors::{NeighborError, ProcessError};
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
@@ -24,6 +24,7 @@ pub fn validate_neighbor_is_established(ts: &TcpStream, bgp_proc: &BGPProcess) -
 }
 
 
+
 pub fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), NeighborError> {
     println!("handling update message");
     let ip = validate_neighbor_is_established(tcp_stream, bgp_proc)?;
@@ -34,12 +35,13 @@ pub fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_pr
     Ok(())
 }
 
-pub fn send_update(stream: &mut TcpStream, message: UpdateMessage) {
-    println!("Preparing to send update");
-   // let message_bytes = message.convert_to_bytes();
-    //stream.write_all(&message_bytes[..]).unwrap();
-    println!("Sent update");
-}
+//
+// pub fn send_update(stream: &mut TcpStream, message: UpdateMessage) {
+//     println!("Preparing to send update");
+//     let message_bytes = message.convert_to_bytes();
+//     stream.write_all(&message_bytes[..]).unwrap();
+//     println!("Sent update");
+// }
 
 // #[derive(PartialEq, Debug)]
 // pub enum PathAttributes {
@@ -93,6 +95,30 @@ impl Flags {
         }
         flags
     }
+
+    pub fn to_u8(&self) -> u8 {
+        let mut flags: u8 = 0;
+
+
+        if let Flag::Optional(true) = self.optional {
+            flags |= 0b1000_0000;
+        }
+
+        if let Flag::Transitive(true) = self.transitive {
+            flags |= 0b0100_0000;
+        }
+
+        if let Flag::Partial(true) = self.partial {
+            flags |= 0b0010_0000;
+        }
+
+        if let Flag::ExtendedLength(true) = self.extended_length {
+            flags |= 0b0001_0000;
+        }
+
+        flags
+    }
+
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
@@ -118,6 +144,19 @@ impl TypeCode {
             6 => TypeCode::AtomicAggregate,
             7 => TypeCode::Aggregator,
             _ => unreachable!()
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            // 0 is reserved
+            TypeCode::Origin           =>   1,
+            TypeCode::AsPath           =>   2,
+            TypeCode::NextHop          =>   3,
+            TypeCode::MultiExitDisc    =>   4,
+            TypeCode::LocalPref        =>   5,
+            TypeCode::AtomicAggregate  =>   6,
+            TypeCode::Aggregator       =>   7,
         }
     }
 }
@@ -148,6 +187,14 @@ impl Origin {
             origin_type
         }
     }
+
+    pub fn to_u8(&self) -> u8 {
+        match self.origin_type {
+            OriginType::IGP => 0,
+            OriginType::EGP => 1,
+            OriginType::Incomplete => 2
+        }
+    }
 }
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum OriginType {
@@ -170,12 +217,33 @@ impl AsPathSegmentType {
             _ => panic!("Unknown AsPathSegmentType in AsPathSegmentType::from_u8")
         }
     }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            AsPathSegmentType::ASSet => 1,
+            AsPathSegmentType::AsSequence => 2
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum AS {
     AS2(u16),
     AS4(u32)
+}
+
+impl AS {
+    // TODO handle AS2, mayble match self, and return an u32.
+    // Then return an enum that shows variant used.
+
+    pub fn to_u32(&self) -> Result<u32, ProcessError> {
+
+        match self {
+            AS::AS2(as_num) => Err(ProcessError::AS2Unhandled),
+            AS::AS4(as_num) => Ok(*as_num)
+        }
+
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -192,6 +260,29 @@ pub struct AsPathSegment {
 }
 
 impl AsPath {
+    pub fn to_u8_vec(&self) -> Result<Vec<u8>, ProcessError> {
+        let mut bytes = Vec::new();
+
+        // as path
+        // segment type
+        let asp_seg_type = self.as_path_segment.segment_type.to_u8().to_be_bytes();
+        bytes.extend(asp_seg_type);
+
+        // number of as
+        let num_of_as = self.as_path_segment.number_of_as.to_be_bytes();
+        bytes.extend(num_of_as);
+
+        if self.as_path_segment.number_of_as as usize != self.as_path_segment.as_list.len() {
+            return Err(ProcessError::ASNumLenMismatch)
+        }
+
+        // variable as list
+        for as_num in &self.as_path_segment.as_list {
+            bytes.extend(as_num.to_u32().unwrap().to_be_bytes());
+        }
+
+        Ok(bytes)
+    }
     pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
         let segment_type = AsPathSegmentType::from_u8(bytes[0]);
 
@@ -236,6 +327,7 @@ impl NextHop {
             ipv4addr: Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]),
         }
     }
+
 }
 
 
@@ -355,6 +447,50 @@ impl PathAttribute {
             len,
             data
         }
+    }
+
+    pub fn convert_to_bytes(&self) -> Result<Vec<u8>, ProcessError> {
+        let mut pa_bytes = Vec::new();
+
+        // flags
+        let flags = self.flags.to_u8().to_be_bytes();
+        pa_bytes.extend(flags);
+
+        // type_code
+        let type_code = self.type_code.to_u8().to_be_bytes();
+        pa_bytes.extend(type_code);
+
+        // len
+        let len = self.len.to_be_bytes();
+        pa_bytes.extend(len);
+
+        //data variable
+        match &self.data {
+            PAdata::Origin(origin) => {
+                pa_bytes.extend(origin.to_u8().to_be_bytes());
+            },
+            PAdata::AsPath(as_path) => {
+                let asp = as_path.to_u8_vec()?;
+                pa_bytes.extend(asp);
+            },
+            PAdata::NextHop(nh) => {
+                pa_bytes.extend(nh.ipv4addr.to_bits().to_be_bytes());
+            },
+            PAdata::MultiExitDisc(med) => {
+                pa_bytes.extend(med.value.to_be_bytes());
+            },
+            PAdata::LocalPref(lp) => {
+                pa_bytes.extend(lp.value.to_be_bytes());
+            },
+            PAdata::AtomicAggregate(atomic_agg) => {
+                pa_bytes.extend(atomic_agg.value.to_be_bytes());
+            },
+            PAdata::Aggregator(agg) => {
+                pa_bytes.extend(agg.ipv4addr.to_bits().to_be_bytes());
+            }
+        }
+
+        Ok(pa_bytes)
     }
 
     pub fn get_pa_data_from_pa(&self, type_code: TypeCode) -> Option<PAdata> {
@@ -629,65 +765,101 @@ impl UpdateMessage {
             nlri
         }
     }
-    // }
-    // pub fn convert_to_bytes(&self) -> Vec<u8> {
-    //     let message_header = build_message_header(MessageType::Update);
-    //     let mut message: Vec<u8> = Vec::new();
-    //     // marker
-    //     for b in message_header.marker {
-    //         message.push(b);
-    //     }
-    //     let mut len: u16 = message.len() as u16;
-    //     len += 2;
-    //
-    //     let msg_type: u8 = message_header.message_type.to_u8();
-    //     len += 1;
-    //
-    //     let ver = self.version.to_u8();
-    //     len += 1;
-    //
-    //     let as_num_bytes = self.as_number.to_be_bytes();
-    //     len += 2;
-    //
-    //     let hold_time_bytes = self.hold_time.to_be_bytes();
-    //     len += 2;
-    //
-    //     let identifier_bytes = self.identifier.to_bits().to_be_bytes();
-    //     len += 4;
-    //
-    //     let opt_params_len : u8 = 28;
-    //     len += 1; // for the len field itself
-    //     len += opt_params_len as u16; // for the params
-    //
-    //     // adding len to the vec must come second to last because we need the total len of the payload
-    //     let len_bytes: [u8; 2] = len.to_be_bytes();
-    //     message.push(len_bytes[0]);
-    //     message.push(len_bytes[1]);
-    //
-    //     message.push(msg_type);
-    //
-    //     message.push(ver);
-    //
-    //     message.push(as_num_bytes[0]);
-    //     message.push(as_num_bytes[1]);
-    //
-    //
-    //     message.push(hold_time_bytes[0]);
-    //     message.push(hold_time_bytes[1]);
-    //
-    //     message.push(identifier_bytes[0]);
-    //     message.push(identifier_bytes[1]);
-    //     message.push(identifier_bytes[2]);
-    //     message.push(identifier_bytes[3]);
-    //
-    //     // TODO remove this after testing
-    //     // sending len 28 and opt params taken from CSR packet cap
-    //     //message.push(0);
-    //     message.push(opt_params_len);
-    //
-    //     let opt_params: [u8; 28] = [0x02, 0x06, 0x01, 0x04, 0x00, 0x01, 0x00, 0x01, 0x02, 0x02, 0x80, 0x00, 0x02, 0x02, 0x02, 0x00, 0x02, 0x02, 0x46, 0x00, 0x02, 0x06, 0x41, 0x04, 0x00, 0x00, 0x00, 0x01];
-    //     message.extend_from_slice(&opt_params);
-    //
-    //     message
-    // }
+
+    pub fn convert_to_bytes(&self) -> Vec<u8> {
+        let mut message: Vec<u8> = vec![0xFF; 16];
+        // marker
+        let mut len: u16 = message.len() as u16;
+        len += 2;
+
+        let message_type = MessageType::Update;
+
+        let msg_type: u8 = message_type.to_u8();
+        len += 1;
+
+
+        // withdrawn routes len.
+        let wr_len_bytes = self.withdrawn_route_len.to_be_bytes();
+        len += 2;
+
+        //variable withdrawn routes
+        let mut wr_vec_len: u16 = 0;
+        let mut withdrawn_routes_bytes: Vec<u8> = Vec::new();
+        if self.withdrawn_route_len > 0 && self.withdrawn_routes.is_some() {
+            // can't trust anything since these updates may be generated by someone fuzzing
+            let wr_vec = self.withdrawn_routes.as_ref().unwrap();
+            wr_vec_len = wr_vec.len() as u16;
+            // TODO remove unwrap and handle
+            for wr in wr_vec {
+                withdrawn_routes_bytes.extend(wr.convert_to_bytes());
+            }
+        }
+        len += wr_vec_len;
+
+
+
+        // total path att. len
+        let path_att_len_bytes = self.total_path_attribute_len.to_be_bytes();
+        len += 2;
+
+        //variable path atts
+        let mut path_att_vec_len: u16 = 0;
+        let mut path_att_bytes: Vec<u8> = Vec::new();
+        if self.total_path_attribute_len > 0 && self.path_attributes.is_some() {
+            let path_att_vec = self.path_attributes.as_ref().unwrap();
+            path_att_vec_len = path_att_vec.len() as u16;
+                for pa in path_att_vec {
+                    match pa.convert_to_bytes() {
+                        Ok(pa_bytes) => {
+                            path_att_bytes.extend(pa_bytes);
+                        },
+                        Err(e) => {
+                            println!("Error converting PA to bytes: {:#?}", e);
+                        }
+                    }
+                }
+
+
+        }
+        len += path_att_vec_len;
+
+
+        let mut nlri_bytes: Vec<u8> = Vec::new();
+        // not a field but will be multiplied by 5 and added to len of the update message
+        let mut nlri_len: u16 = 0;
+        // actual nlri field(s)
+
+        // I guess I could also just as_ref() and .unwrap() here
+        if let Some(nlri) = &self.nlri {
+            nlri_len = nlri.len() as u16;
+            for n in nlri {
+                nlri_bytes.extend(n.convert_to_bytes());
+            }
+        }
+        len += nlri_len * 5;
+
+
+
+        let opt_params_len : u8 = 28;
+        len += 1; // for the len field itself
+        len += opt_params_len as u16; // for the params
+
+        // adding len to the vec must come second to last because we need the total len of the payload
+        let len_bytes = len.to_be_bytes();
+        message.extend(len_bytes);
+
+        message.push(msg_type);
+
+        message.extend(wr_len_bytes);
+
+        message.extend(withdrawn_routes_bytes);
+
+        message.extend(path_att_len_bytes);
+
+        message.extend(path_att_bytes);
+
+        message.extend(nlri_bytes);
+
+        message
+    }
 }

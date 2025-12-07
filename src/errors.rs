@@ -31,7 +31,9 @@ pub enum MessageError {
 
 #[derive(PartialEq, Debug)]
 pub enum ProcessError {
-    BadNLRILen
+    BadNLRILen,
+    AS2Unhandled,
+    ASNumLenMismatch,
 }
 
 #[derive(PartialEq, Debug)]
