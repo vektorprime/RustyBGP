@@ -1,10 +1,12 @@
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
 use std::io::{Read, Write};
+use std::path::Path;
 use crate::errors::*;
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
 use crate::neighbors::Neighbor;
+use crate::routes::NLRI;
 use crate::utils::*;
 
 
@@ -65,6 +67,34 @@ pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc
             let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hello_time, bgp_proc.identifier, 0, None);
             send_open(tcp_stream, open_message)?;
             send_keepalive(tcp_stream)?;
+
+            // TODO REMOVE AFTER TESTING IT WORKS HERE
+            let mut path_attributes: Vec<PathAttribute> = Vec::new();
+
+            let origin_pa = PathAttribute::new_origin(OriginType::IGP);
+            path_attributes.push(origin_pa);
+
+            let as_list = vec![2];
+            let as_path_pa = PathAttribute::new_as_path(as_list);
+            path_attributes.push(as_path_pa);
+
+            let next_hop_pa = PathAttribute::new_next_hop(Ipv4Addr::new(10, 0, 0, 3));
+            path_attributes.push(next_hop_pa);
+
+            let nlri = vec![NLRI::new(Ipv4Addr::new(1,1,1,1), 32).unwrap()];
+
+            let msg_len = 48;
+            let message_header = MessageHeader::new(MessageType::Update, Some(msg_len));
+            let update_message = UpdateMessage {
+                message_header,
+                withdrawn_route_len: 0,
+                withdrawn_routes: None,
+                total_path_attribute_len: 20,
+                path_attributes: Some(path_attributes),
+                nlri: Some(nlri),
+            };
+            send_update(tcp_stream, update_message)?;
+
             return Ok(())
         }
 
@@ -88,9 +118,22 @@ pub fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(), Mes
             Err(MessageError::UnableToWriteToTCPStream)
         }
     }
-
 }
 
+pub fn send_update(stream: &mut TcpStream, message: UpdateMessage) -> Result<(), MessageError> {
+    println!("Preparing to send Update");
+    let message_bytes = message.convert_to_bytes();
+    let res  =stream.write_all(&message_bytes[..]);
+    match res {
+        Ok(_) => {
+            println!("Sent Update");
+            Ok(())
+        },
+        Err(_) => {
+            Err(MessageError::UnableToWriteToTCPStream)
+        }
+    }
+}
 
 #[derive(PartialEq, Debug)]
 pub struct OpenMessage {

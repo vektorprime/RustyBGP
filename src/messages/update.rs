@@ -1,5 +1,6 @@
 use std::net::{ Ipv4Addr, IpAddr, TcpListener, TcpStream};
 use std::io::{Bytes, Read, Write};
+use std::path::Path;
 use std::thread::current;
 use crate::errors::{NeighborError, ProcessError};
 use crate::messages::header::*;
@@ -35,31 +36,6 @@ pub fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_pr
     Ok(())
 }
 
-//
-// pub fn send_update(stream: &mut TcpStream, message: UpdateMessage) {
-//     println!("Preparing to send update");
-//     let message_bytes = message.convert_to_bytes();
-//     stream.write_all(&message_bytes[..]).unwrap();
-//     println!("Sent update");
-// }
-
-// #[derive(PartialEq, Debug)]
-// pub enum PathAttributes {
-//     Origin,
-//     ASPath,
-//     ASSequence,
-//     NextHop,
-//     MultiExitDisc,
-// }
-
-#[derive(PartialEq, Debug, Copy, Clone)]
-pub struct Flags {
-    optional: Flag,
-    transitive: Flag,
-    partial: Flag,
-    extended_length: Flag,
-}
-
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Flag {
@@ -69,6 +45,26 @@ pub enum Flag {
     // TODO handle extended length causing the attribute length field to be 2 bytes
     ExtendedLength(bool), // bit 3
 }
+
+#[derive(PartialEq, Debug, Copy, Clone)]
+pub struct Flags {
+    optional: Flag,
+    transitive: Flag,
+    partial: Flag,
+    extended_length: Flag,
+}
+
+// impl Default for Flags {
+//     fn default() -> Self {
+//         Flags {
+//             optional: Flag::Optional(false),
+//             transitive: Flag::Transitive(false),
+//             partial: Flag::Partial(false),
+//             extended_length: Flag::ExtendedLength(false),
+//         }
+//     }
+// }
+
 
 impl Flags {
     pub fn new() -> Self {
@@ -251,6 +247,7 @@ pub struct AsPath {
     category: Category,
     as_path_segment: AsPathSegment
 }
+
 #[derive(PartialEq, Debug, Clone)]
 pub struct AsPathSegment {
     pub segment_type: AsPathSegmentType, // 1 byte
@@ -447,6 +444,123 @@ impl PathAttribute {
             len,
             data
         }
+    }
+
+
+    // TODO add arguments here after testing is finished
+    pub fn new_next_hop(nhp_ip: Ipv4Addr) -> Self {
+        let mut flags = Flags::new();
+        flags.transitive = Flag::Transitive(true);
+
+        // TODO when we add in IPv6 this needs to be a match
+        let len = 4;
+
+
+        let next_hop = NextHop {
+            category: Category::WellKnownMandatory,
+            ipv4addr: nhp_ip,
+        };
+
+        let data = PAdata::NextHop(next_hop);
+
+        PathAttribute {
+            flags,
+            type_code: TypeCode::NextHop,
+            len,
+            data,
+        }
+    }
+
+
+
+    // TODO add arguments here after testing is finished
+    pub fn new_as_path(as_list_vec: Vec<u32>) -> Self {
+        let mut flags = Flags::new();
+        flags.transitive = Flag::Transitive(true);
+
+        // TODO replace len after testing is finished
+        let len = 2 + as_list_vec.len() as u8 * 4;
+
+        let mut as_list = Vec::new();
+        for as_num in as_list_vec {
+            as_list.push(AS::AS4(as_num));
+        }
+
+        let as_path_segment = AsPathSegment {
+            segment_type: AsPathSegmentType::AsSequence,
+            number_of_as: 1,
+            as_list,
+        };
+
+        let as_path = AsPath {
+            category: Category::WellKnownMandatory,
+            as_path_segment
+        };
+
+        let data = PAdata::AsPath(as_path);
+
+        PathAttribute {
+            flags,
+            type_code: TypeCode::AsPath,
+            len,
+            data,
+        }
+    }
+
+
+    pub fn new_origin(origin_type: OriginType) -> Self {
+
+        let mut flags = Flags::new();
+        flags.transitive = Flag::Transitive(true);
+
+        // origin len here is always 1
+        let len = 1;
+
+        let category = Category::WellKnownMandatory;
+
+        match origin_type {
+            OriginType::IGP => {
+                let origin = Origin {
+                    category,
+                    origin_type,
+                };
+                let data = PAdata::Origin(origin);
+                PathAttribute {
+                    flags,
+                    type_code: TypeCode::Origin,
+                    len,
+                    data,
+                }
+            },
+            OriginType::EGP => {
+                let origin = Origin {
+                    category,
+                    origin_type,
+                };
+                let data = PAdata::Origin(origin);
+                PathAttribute {
+                    flags,
+                    type_code: TypeCode::Origin,
+                    len,
+                    data,
+                }
+            },
+            OriginType::Incomplete => {
+                let origin = Origin {
+                    category,
+                    origin_type,
+                };
+                let data = PAdata::Origin(origin);
+                PathAttribute {
+                    flags,
+                    type_code: TypeCode::Origin,
+                    len,
+                    data,
+                }
+            }
+        }
+
+
     }
 
     pub fn convert_to_bytes(&self) -> Result<Vec<u8>, ProcessError> {
@@ -756,6 +870,7 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
 impl UpdateMessage {
     pub fn new(message_len: u16, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, nlri: Option<Vec<NLRI>> ) -> Self {
         let message_header = MessageHeader::new(MessageType::Update, Some(message_len));
+
         UpdateMessage {
             message_header,
             withdrawn_route_len,
@@ -768,12 +883,12 @@ impl UpdateMessage {
 
     pub fn convert_to_bytes(&self) -> Vec<u8> {
         let mut message: Vec<u8> = vec![0xFF; 16];
+
         // marker
         let mut len: u16 = message.len() as u16;
         len += 2;
 
         let message_type = MessageType::Update;
-
         let msg_type: u8 = message_type.to_u8();
         len += 1;
 
@@ -781,6 +896,8 @@ impl UpdateMessage {
         // withdrawn routes len.
         let wr_len_bytes = self.withdrawn_route_len.to_be_bytes();
         len += 2;
+
+        // 21
 
         //variable withdrawn routes
         let mut wr_vec_len: u16 = 0;
@@ -802,12 +919,14 @@ impl UpdateMessage {
         let path_att_len_bytes = self.total_path_attribute_len.to_be_bytes();
         len += 2;
 
+        // 23
+
         //variable path atts
         let mut path_att_vec_len: u16 = 0;
         let mut path_att_bytes: Vec<u8> = Vec::new();
         if self.total_path_attribute_len > 0 && self.path_attributes.is_some() {
             let path_att_vec = self.path_attributes.as_ref().unwrap();
-            path_att_vec_len = path_att_vec.len() as u16;
+            //path_att_vec_len = path_att_vec.len() as u16;
                 for pa in path_att_vec {
                     match pa.convert_to_bytes() {
                         Ok(pa_bytes) => {
@@ -818,10 +937,9 @@ impl UpdateMessage {
                         }
                     }
                 }
-
-
         }
-        len += path_att_vec_len;
+
+        len += path_att_bytes.len() as u16;
 
 
         let mut nlri_bytes: Vec<u8> = Vec::new();
@@ -837,12 +955,6 @@ impl UpdateMessage {
             }
         }
         len += nlri_len * 5;
-
-
-
-        let opt_params_len : u8 = 28;
-        len += 1; // for the len field itself
-        len += opt_params_len as u16; // for the params
 
         // adding len to the vec must come second to last because we need the total len of the payload
         let len_bytes = len.to_be_bytes();
