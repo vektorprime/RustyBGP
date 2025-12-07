@@ -1,8 +1,11 @@
 use std::net::IpAddr;
-use crate::messages::update::AS;
-use serde::Deserialize;
 use std::fs;
+
+use serde::Deserialize;
 use toml;
+
+//use crate::messages::update::AS;
+use crate::routes::*;
 //used to handle the toml configurations
 
 pub fn read_config_file(file_name: String) -> Config {
@@ -16,7 +19,9 @@ pub fn read_config_file(file_name: String) -> Config {
 pub struct Config {
     pub process_config: ProcessConfig,
     pub neighbors_config: Vec<NeighborConfig>,
+    pub net_advertisements_config: Vec<NetAdvertisementsConfig>
 }
+
 #[derive(Debug, Deserialize)]
 pub struct ProcessConfig {
     pub my_as: u16,
@@ -30,4 +35,10 @@ pub struct NeighborConfig {
     pub as_num: u16,
     pub hello_time: u16,
     pub hold_time: u16,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NetAdvertisementsConfig {
+    #[serde(rename = "prefix")]
+    nlri: NLRI
 }

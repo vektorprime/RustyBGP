@@ -1,6 +1,10 @@
 use std::net::Ipv4Addr;
+use std::str::FromStr;
+
 use crate::errors::{BGPError, ProcessError};
 use crate::messages::update::*;
+
+use serde::Deserialize;
 
 #[derive(Debug)]
 pub enum RouteCast {
@@ -9,7 +13,8 @@ pub enum RouteCast {
 }
 
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Debug, Clone, Deserialize)]
+#[serde(try_from = "String")]
 pub struct NLRI {
     pub len: u8,
     // TODO handle bigger prefixes and padding/trailing bits so that this falls on a byte boundary
@@ -37,6 +42,38 @@ impl NLRI {
         bytes
     }
 
+}
+
+// pub fn convert_configured_networks_to_nlri(Vec<NetAdvertisementsConfig>) ->
+
+impl FromStr for NLRI {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let adv_parts: Vec<&str> = s.split('/').collect();
+        if adv_parts.len() != 2 {
+            return Err("Unable to parse net_advertisements_config".parse().unwrap());
+        }
+        let prefix = Ipv4Addr::from_str(adv_parts[0]).map_err(|_| "Unable to parse prefix from net_advertisements_config".to_string())?;
+        let prefix_len = u8::from_str(adv_parts[1]).map_err(|_| "Unable to parse prefix len from net_advertisements_config".to_string())?;
+        let nlri = NLRI::new(prefix, prefix_len).map_err(|_| "unable to create NLRI from prefix and len in config".to_string())?;
+        Ok(nlri)
+    }
+}
+
+impl TryFrom<String> for NLRI {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let adv_parts: Vec<&str> = s.split('/').collect();
+        if adv_parts.len() != 2 {
+            return Err("Unable to parse net_advertisements_config".parse().unwrap());
+        }
+        let prefix = Ipv4Addr::from_str(adv_parts[0]).map_err(|_| "Unable to parse prefix from net_advertisements_config".to_string())?;
+        let prefix_len = u8::from_str(adv_parts[1]).map_err(|_| "Unable to parse prefix len from net_advertisements_config".to_string())?;
+        let nlri = NLRI::new(prefix, prefix_len).map_err(|_| "unable to create NLRI from prefix and len in config".to_string())?;
+        Ok(nlri)
+    }
 }
 
 #[derive(Debug)]

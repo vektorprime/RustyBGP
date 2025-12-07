@@ -18,6 +18,7 @@ mod config;
 
 fn main() {
     let mut bgp = BGPProcess::new("bgp_config.toml".to_string());
+    println!("{:#?}", bgp);
     bgp.run();
 }
 

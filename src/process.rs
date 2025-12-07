@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::messages::*;
 use crate::neighbors::*;
-
+use crate::routes::*;
 use crate::config::*;
 use crate::errors::{NeighborError};
 
@@ -23,12 +23,14 @@ fn start_tcp(port: &str) -> TcpListener {
     }
 }
 
+#[derive(Debug)]
 pub struct BGPProcess {
     pub(crate) my_as: u16,
     pub(crate) identifier: Ipv4Addr,
     //pub active_neighbors: Vec<Neighbor>,
     pub active_neighbors: HashMap<Ipv4Addr, Neighbor>,
-    pub configured_neighbors: Vec<NeighborConfig>
+    pub configured_neighbors: Vec<NeighborConfig>,
+    pub configured_networks: Vec<NetAdvertisementsConfig>,
 }
 
 
@@ -40,7 +42,8 @@ impl BGPProcess {
             identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap(),
             //active_neighbors: Vec::new(),
             active_neighbors: HashMap::new(),
-            configured_neighbors: config.neighbors_config
+            configured_neighbors: config.neighbors_config,
+            configured_networks: config.net_advertisements_config,
         }
     }
 
