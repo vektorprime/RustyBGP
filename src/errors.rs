@@ -25,13 +25,24 @@ pub enum MessageError {
     InvalidBufferIndex,
     BadBGPVersion,
     PeerIPNotEstablished,
-    MissingNLRI
+    MissingNLRI,
+    MissingPathAttributes
+}
+
+#[derive(PartialEq, Debug)]
+pub enum ProcessError {
+    BadNLRILen
 }
 
 #[derive(PartialEq, Debug)]
 pub enum BGPError {
     Neighbor(NeighborError),
     Message(MessageError),
+    Process(ProcessError),
+}
+
+impl From<ProcessError> for BGPError {
+    fn from(e: ProcessError)  -> BGPError { BGPError::Process(e) }
 }
 impl From<NeighborError> for BGPError {
     fn from(e: NeighborError) -> BGPError {

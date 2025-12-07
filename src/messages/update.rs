@@ -6,7 +6,7 @@ use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
 use crate::neighbors::Neighbor;
-use crate::routes::RouteV4;
+use crate::routes::*;
 use crate::utils::{extract_u16_from_bytes, extract_u32_from_bytes, extract_u8_from_byte};
 
 pub fn validate_neighbor_is_established(ts: &TcpStream, bgp_proc: &BGPProcess) -> Result<Ipv4Addr, NeighborError> {
@@ -30,6 +30,7 @@ pub fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_pr
     let update_message = extract_update_message(tsbuf)?;
     let mut neighbor = bgp_proc.active_neighbors.get_mut(&ip).unwrap();
     neighbor.process_routes_from_message(update_message)?;
+
     Ok(())
 }
 
@@ -38,13 +39,6 @@ pub fn send_update(stream: &mut TcpStream, message: UpdateMessage) {
    // let message_bytes = message.convert_to_bytes();
     //stream.write_all(&message_bytes[..]).unwrap();
     println!("Sent update");
-}
-
-#[derive(PartialEq, Debug)]
-pub struct NLRI {
-    len: u8,
-    // TODO handle bigger prefixes and padding/trailing bits so that this falls on a byte boundary
-    prefix: Ipv4Addr
 }
 
 // #[derive(PartialEq, Debug)]
@@ -56,7 +50,7 @@ pub struct NLRI {
 //     MultiExitDisc,
 // }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Flags {
     optional: Flag,
     transitive: Flag,
@@ -65,7 +59,7 @@ pub struct Flags {
 }
 
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Flag {
     Optional(bool), // bit 0
     Transitive(bool), // bit 1
@@ -101,7 +95,7 @@ impl Flags {
     }
 }
 
-#[derive(PartialEq, Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum TypeCode {
     Origin,
     AsPath,
@@ -128,14 +122,14 @@ impl TypeCode {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Category {
     WellKnownMandatory,
     WellKnownDiscretionary,
     OptionalTransitive,
     OptionalNonTransitive,
 }
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Origin {
     category: Category,
     origin_type: OriginType
@@ -155,14 +149,14 @@ impl Origin {
         }
     }
 }
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum OriginType {
     IGP,
     EGP,
     Incomplete
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum AsPathSegmentType {
     ASSet,
     AsSequence
@@ -178,18 +172,18 @@ impl AsPathSegmentType {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum AS {
     AS2(u16),
     AS4(u32)
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct AsPath {
     category: Category,
     as_path_segment: AsPathSegment
 }
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct AsPathSegment {
     pub segment_type: AsPathSegmentType, // 1 byte
     pub number_of_as: u8, // number of ASes, not number of bytes
@@ -228,7 +222,7 @@ impl AsPath {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct NextHop {
     category: Category,
     // TODO handle other sizes
@@ -245,7 +239,7 @@ impl NextHop {
 }
 
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct MultiExitDisc {
     category: Category,
     value: u32, // 4 bytes
@@ -260,7 +254,7 @@ impl MultiExitDisc {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct LocalPref {
     category: Category,
     value: u32, // 4 bytes
@@ -275,20 +269,21 @@ impl LocalPref {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct AtomicAggregate {
     category: Category,
     value: u32, // 4 bytes
 }
 
-#[derive(PartialEq, Debug)]
+
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Aggregator {
     category: Category,
     as_num: AS, // 2 bytes or 4
     ipv4addr: Ipv4Addr
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum PAdata {
     Origin(Origin),
     AsPath(AsPath),
@@ -298,6 +293,7 @@ pub enum PAdata {
     AtomicAggregate(AtomicAggregate),
     Aggregator(Aggregator)
 }
+
 
 // pub fn extract_num_of_paths_from_data(bytes: &Vec<u8>) -> u8 {
 //     for i in 0..bytes.len() {
@@ -345,21 +341,93 @@ impl PAdata {
 
 #[derive(PartialEq, Debug)]
 pub struct PathAttribute {
-    flags: Flags,
-    type_code: TypeCode,
-    len: u8,
-    data: PAdata
+    pub flags: Flags,
+    pub type_code: TypeCode,
+    pub len: u8,
+    pub data: PAdata
 }
 
 impl PathAttribute {
     pub fn new(flags: Flags, type_code: TypeCode, len: u8, data: PAdata) -> Self {
-
         PathAttribute {
             flags,
             type_code,
             len,
             data
         }
+    }
+
+    pub fn get_pa_data_from_pa(&self, type_code: TypeCode) -> Option<PAdata> {
+        if self.type_code == type_code {
+            return Some(self.data.clone())
+        }
+        None
+    }
+
+    pub fn get_pa_data_from_pa_vec(type_code: TypeCode, pa_vec: &Vec<PathAttribute>) -> Option<PAdata> {
+        match type_code {
+            TypeCode::Origin => {
+                for pa in pa_vec {
+                    if matches!(pa.data, PAdata::Origin(_)) {
+                        return Some(pa.data.clone())
+                    }
+                }
+                None
+            },
+            TypeCode::AsPath => {
+                for pa in pa_vec {
+                    if matches!(pa.data, PAdata::AsPath(_)) {
+                        return Some(pa.data.clone())
+                    }
+                }
+                None
+            },
+            TypeCode::NextHop => {
+                for pa in pa_vec {
+                    if matches!(pa.data, PAdata::NextHop(_)) {
+                        return Some(pa.data.clone())
+                    }
+                }
+                None
+            },
+            TypeCode::MultiExitDisc => {
+                for pa in pa_vec {
+                    if matches!(pa.data, PAdata::MultiExitDisc(_)) {
+                        return Some(pa.data.clone())
+                    }
+                }
+                None
+            },
+            TypeCode::LocalPref => {
+                for pa in pa_vec {
+                    if matches!(pa.data, PAdata::LocalPref(_)) {
+                        return Some(pa.data.clone())
+                    }
+                }
+                None
+            },
+            TypeCode::AtomicAggregate => {
+                for pa in pa_vec {
+                    if matches!(pa.data, PAdata::AtomicAggregate(_)) {
+                        return Some(pa.data.clone())
+                    }
+                }
+                None
+            },
+            TypeCode::Aggregator => {
+                for pa in pa_vec {
+                    if matches!(pa.data, PAdata::Aggregator(_)) {
+                        return Some(pa.data.clone())
+                    }
+                }
+                None
+            }
+        }
+
+        // if self.type_code == type_code {
+        //     return Some(self.data.clone())
+        // }
+        // None
     }
 }
 
@@ -378,30 +446,33 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
     // TODO I only copied this, I have not modified it yet
     println!("extracting update message");
     let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
-    println!("message_len: {}", message_len);
+    //println!("message_len: {}", message_len);
     let withdrawn_route_len = extract_u16_from_bytes(tsbuf, 19, 21)?;
-    println!("withdrawn route len is : {}", withdrawn_route_len);
+    //println!("withdrawn route len is : {}", withdrawn_route_len);
     let mut current_idx = 0;
     let base_idx = 21;
     let route_size = 5;
     let withdrawn_routes: Option<Vec<NLRI>> = if withdrawn_route_len >= route_size {
-        println!("withdrawn_route_len is greater than or equal to route_size");
+        //println!("withdrawn_route_len is greater than or equal to route_size");
         let mut routes: Vec<NLRI> = Vec::new();
         for x in 0.. (withdrawn_route_len / route_size) as usize {
             current_idx = base_idx + (route_size as usize * x);
-            println!("current_idx {}", current_idx);
+            //println!("current_idx {}", current_idx);
             let prefix_len = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
-            println!("prefix_len {}", prefix_len);
+            //println!("prefix_len {}", prefix_len);
             current_idx += 1;
 
             let route_u32 = extract_u32_from_bytes(tsbuf, current_idx, current_idx + route_size as usize)?;
-            println!("route_u32 {}", route_u32);
-            routes.push(NLRI{
-                len: prefix_len,
-                prefix: Ipv4Addr::from_bits(route_u32)
-            });
+            //println!("route_u32 {}", route_u32);
+            match NLRI::new(Ipv4Addr::from_bits(route_u32), prefix_len) {
+                Ok(nl) => { routes.push(nl); },
+                Err(e) => {
+                    println!("Error: {:#?}", e);
+                }
+            }
+            // regardless we need to inc the idx
             current_idx += 4;
-            println!("current_idx {}", current_idx);
+            //println!("current_idx {}", current_idx);
         }
         Some(routes)
     } else {
@@ -409,12 +480,12 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
     };
 
     let mut current_idx = base_idx + withdrawn_route_len as usize;
-    println!("current_idx {}", current_idx);
+    //println!("current_idx {}", current_idx);
 
     let total_path_attribute_len = extract_u16_from_bytes(tsbuf, current_idx, current_idx + 2)?;
-    println!("total_path_attribute_len {}", total_path_attribute_len);
+    //println!("total_path_attribute_len {}", total_path_attribute_len);
     current_idx += 2;
-    println!("current_idx {}", current_idx);
+    //println!("current_idx {}", current_idx);
 
         // origin, aspath, next hop are the mandatory atts (24 total).
 
@@ -424,33 +495,33 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
         // The PAs are variable length here so we need to parse until we've read the whole msg len
         let mut pa_idx: usize = 0;
         while pa_idx < total_path_attribute_len as usize {
-            println!("current_idx is less than message len, extracting path attributes");
+            //println!("current_idx is less than message len, extracting path attributes");
 
             let flags = {
                 // TODO handle these errors so we continue instead of returning from the func
                 let val = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
                 Flags::from_u8(val)
             };
-            println!("flags {:#?}", flags);
+            //println!("flags {:#?}", flags);
 
             current_idx += 1;
             pa_idx += 1;
-            println!("current_idx {}", current_idx);
+            //println!("current_idx {}", current_idx);
 
             let type_code = {
                 let val = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
                 TypeCode::from_u8(val)
             };
-            println!("type_code {:#?}", type_code);
+            //println!("type_code {:#?}", type_code);
 
             current_idx += 1;
             pa_idx += 1;
-            println!("current_idx {}", current_idx);
+            //println!("current_idx {}", current_idx);
 
             let len = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
             current_idx += 1;
             pa_idx += 1;
-            println!("current_idx {}", current_idx);
+            //println!("current_idx {}", current_idx);
 
             let data_bytes = {
                 let mut bytes: Vec<u8> = Vec::new();
@@ -462,28 +533,33 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
                 }
                 bytes
             };
-            println!("data_bytes {:#?}", data_bytes);
+            //println!("data_bytes {:#?}", data_bytes);
 
             current_idx += len as usize;
             pa_idx += len as usize;
-            println!("current_idx {}", current_idx);
+            //println!("current_idx {}", current_idx);
 
             // parse the bytes we just read for the PA
             //let data = extract_path_attributes_from_data(&data_bytes, total_path_attribute_len);
             if !data_bytes.is_empty() {
                 // extract the PAdata object from the vec of bytes and create a new PathAtrribute object to be returned
                 let pa_data = PAdata::from_vec_u8(&type_code, &data_bytes);
-                println!("pa_data is  {:#?}", pa_data);
+                //println!("pa_data is  {:#?}", pa_data);
 
                 pa_collection.push(PathAttribute::new(flags, type_code, len, pa_data));
             }
         }
-        println!("Option<Vec<PathAttribute>> has Some");
+        //println!("Option<Vec<PathAttribute>> has Some");
         Some(pa_collection)
     } else {
-        println!("Option<Vec<PathAttribute>> has None");
+        //println!("Option<Vec<PathAttribute>> has None");
         None
     };
+
+    if current_idx == message_len as usize {
+        //println!("No NLRI in this message because current_idx == message_len");
+        return Err(MessageError::MissingNLRI)
+    }
 
     let nlri = extract_nlri_from_update_message(tsbuf, message_len as usize, &mut current_idx);
     // TODO read and process the optional params
@@ -497,16 +573,16 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
     let route_size: usize = 5;
     let mut nlri = Vec::new();
     let nlri_count: usize = (message_len - *current_idx) / route_size;
-    println!("message_len is  {:#?}", message_len);
-    println!("current_idx is  {:#?}", current_idx);
-    println!("nlri_count is  {:#?}", nlri_count);
+    //println!("message_len is  {:#?}", message_len);
+    //println!("current_idx is  {:#?}", current_idx);
+    //println!("nlri_count is  {:#?}", nlri_count);
 
     for i in 0..nlri_count {
         let len: Option<u8> = {
             match tsbuf.get(*current_idx) {
                 Some(l) => {
                     *current_idx += 1;
-                    println!("Some(l) is  {:#?}", l);
+                    //println!("Some(l) is  {:#?}", l);
                     Some(l.clone())
                 },
                 None => None
@@ -516,27 +592,27 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
        let prefix = match tsbuf.get(*current_idx..=*current_idx + 3) {
             Some(p) => {
                 *current_idx += 4;
-                println!("Some(p) is  {:#?}", p);
+                //println!("Some(p) is  {:#?}", p);
                 Some(p)
             },
             None => None
         };
         if len.is_some() && prefix.is_some() {
-            println!("creating nlri struct");
+            //println!("creating nlri struct");
             let rt = NLRI {
                 len: len.unwrap(),
                 //prefix: u32::from_be_bytes(prefix.unwrap().try_into().unwrap())
                 prefix: Ipv4Addr::from_bits(u32::from_be_bytes(prefix.unwrap().try_into().unwrap()))
             };
-            println!("rt is  {:#?}", rt);
+            //println!("rt is  {:#?}", rt);
             nlri.push(rt);
         }
     }
     if nlri.is_empty() {
-        println!("returning None for NLRI vec");
+        //println!("returning None for NLRI vec");
         None
     } else {
-        println!("returning NLRI vec");
+        //println!("returning NLRI vec");
         Some(nlri)
     }
 }
