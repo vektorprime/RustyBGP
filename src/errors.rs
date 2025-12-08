@@ -8,6 +8,7 @@ pub enum NeighborError {
     NeighborIsIPV6,
     ConfiguredNeighborsEmpty,
     PeerIPNotEstablished,
+    NeighborAlreadyEstablished,
     Message(MessageError)
 }
 

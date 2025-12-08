@@ -91,6 +91,9 @@ impl BGPProcess {
                     //tsbuf.try_reserve(65536).unwrap();
                     let mut tsbuf: Vec<u8> = vec![0;65535];
                     loop {
+                        //check if i've sent all active neighbors updates
+
+
                         // TODO handle read unwrap
                         //read tcp stream into buf and save size read
                         let size = ts.read(&mut tsbuf[..]).unwrap();

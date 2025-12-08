@@ -120,27 +120,24 @@ impl Neighbor {
         // else if keepalive_time_sec == hold_time_sec {
         //     return Err(NeighborError::KeepaliveEqualToHoldTime)
         // }
-        if hold_time_sec == 0 {
-           Neighbor {
-                state: FSM::default(),
-                ip,
-                as_num,
-                // TODO replace this with better logic
-                hello_time: hello_time_sec,
-                hold_time: None,
-                routes_v4: Vec::new(),
-            }
+
+        let hold_time = if hold_time_sec == 0 {
+            None
         } else {
-             Neighbor {
-                state: FSM::default(),
-                ip,
-                as_num,
-                // TODO replace this with better logic
-                hello_time: hello_time_sec,
-                hold_time: Some(Timer::new(hold_time_sec)),
-                routes_v4: Vec::new(),
-            }
+            Some(Timer::new(hold_time_sec))
+        };
+
+
+         Neighbor {
+            state: FSM::default(),
+            ip,
+            as_num,
+            // TODO replace this with better logic
+            hello_time: hello_time_sec,
+            hold_time,
+            routes_v4: Vec::new(),
         }
+
 
     }
 }

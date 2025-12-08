@@ -36,7 +36,12 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
 }
 
 
-pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut OpenMessage, peer_ip: Ipv4Addr, hello_time: u16, my_hold_time: u16) -> Result<(usize), MessageError> {
+pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut OpenMessage, peer_ip: Ipv4Addr, hello_time: u16, my_hold_time: u16) -> Result<(usize), BGPError> {
+    for an in &bgp_proc.configured_neighbors {
+        if peer_ip.to_string() == an.ip {
+            return Err(NeighborError::NeighborAlreadyEstablished.into())
+        }
+    }
     let hold_time = if my_hold_time <= open_message.hold_time {
         my_hold_time
     } else {
