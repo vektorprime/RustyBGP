@@ -1,21 +1,22 @@
-use std::net::{ Ipv4Addr, TcpListener, TcpStream};
-use std::io::{Read, Write};
+use std::net::{ Ipv4Addr };
+use tokio::net::{TcpStream, TcpListener};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
 use crate::messages::header::*;
 use crate::messages::*;
 
-pub fn handle_keepalive_message(tcp_stream: &mut TcpStream) -> Result<(), MessageError> {
-    send_keepalive(tcp_stream)?;
+pub async fn handle_keepalive_message(tcp_stream: &mut TcpStream) -> Result<(), MessageError> {
+    send_keepalive(tcp_stream).await?;
     Ok(())
 }
 
-pub fn send_keepalive(stream: &mut TcpStream) -> Result<(), MessageError> {
+pub async fn send_keepalive(stream: &mut TcpStream) -> Result<(), MessageError> {
     //TODO add peer as input var and match against DB
     //TODO add periodic keepalives
     println!("Preparing to send Keepalive");
     let message = KeepaliveMessage::new();
     let message_bytes = message.convert_to_bytes();
-    let ts = stream.write_all(&message_bytes[..]);
+    let ts = stream.write_all(&message_bytes[..]).await;
     match ts {
         Ok(_) => {
             println!("Sent Keepalive");

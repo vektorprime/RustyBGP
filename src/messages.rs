@@ -1,4 +1,4 @@
-use std::net::{ TcpStream};
+use tokio::net::TcpStream;
 
 use std::fmt;
 
@@ -193,21 +193,21 @@ pub fn extract_messages_from_rec_data(tsbuf: &[u8]) -> Result<Vec<Vec<u8>>, Mess
     Ok(messages)
 }
 
-pub fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+pub async fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
     let message_type = parse_packet_type(&tsbuf)?;
     println!("{}", message_type);
     match message_type {
         MessageType::Open => {
-            handle_open_message(tcp_stream, tsbuf, bgp_proc)?
+            handle_open_message(tcp_stream, tsbuf, bgp_proc).await?
         },
         MessageType::Update => {
-            handle_update_message(tcp_stream, tsbuf, bgp_proc)?
+            handle_update_message(tcp_stream, tsbuf, bgp_proc).await?
         },
         MessageType::Notification => {
             // TODO handle_notification_message
         },
         MessageType::Keepalive => {
-            handle_keepalive_message(tcp_stream)?
+            handle_keepalive_message(tcp_stream).await?
         },
         MessageType::RouteRefresh => {
             // TODO handle route refresh

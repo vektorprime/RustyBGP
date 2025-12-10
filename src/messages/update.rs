@@ -1,4 +1,7 @@
-use std::net::{ Ipv4Addr, IpAddr, TcpListener, TcpStream};
+use std::net::{ Ipv4Addr, IpAddr};
+use tokio::net::{TcpStream, TcpListener};
+
+
 use std::io::{Bytes, Read, Write};
 use std::path::Path;
 use std::thread::current;
@@ -26,7 +29,7 @@ pub fn validate_neighbor_is_established(ts: &TcpStream, bgp_proc: &BGPProcess) -
 
 
 
-pub fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), NeighborError> {
+pub async fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), NeighborError> {
     println!("handling update message");
     let ip = validate_neighbor_is_established(tcp_stream, bgp_proc)?;
     let update_message = extract_update_message(tsbuf)?;

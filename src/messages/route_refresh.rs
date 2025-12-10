@@ -1,5 +1,7 @@
-use std::net::{ Ipv4Addr, TcpListener, TcpStream};
-use std::io::{Read, Write};
+use std::net::{ Ipv4Addr};
+use tokio::net::{TcpStream, TcpListener};
+//use std::io::{Read, Write};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
 use crate::messages::header::*;
 use crate::messages::*;
@@ -29,12 +31,12 @@ pub fn handle_route_refresh_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>)
     Ok(())
 }
 
-pub fn send_route_refresh(stream: &mut TcpStream, afi: AddressFamily, safi: SAFI) {
+pub async fn send_route_refresh(stream: &mut TcpStream, afi: AddressFamily, safi: SAFI) {
     // TODO
     println!("Preparing to send RouteRefresh");
     let message = RouteRefreshMessage::new(afi, safi);
     let message_bytes = message.convert_to_bytes();
-    stream.write_all(&message_bytes[..]).unwrap();
+    stream.write_all(&message_bytes[..]).await.unwrap();
     println!("Sent RouteRefresh");
 }
 

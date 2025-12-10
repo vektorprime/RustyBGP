@@ -1,4 +1,4 @@
-use std::{io::{Read, Write}, net::{TcpListener, TcpStream}};
+use std::{io::{Read, Write}};
 use std::net::Ipv4Addr;
 
 use crate::messages::keepalive::*;
@@ -16,10 +16,11 @@ mod timers;
 mod errors;
 mod config;
 
-fn main() {
+#[tokio::main]
+async fn main()  {
     let mut bgp = BGPProcess::new("bgp_config.toml".to_string());
     println!("{:#?}", bgp);
-    bgp.run();
+    bgp.run().await;
 }
 
 

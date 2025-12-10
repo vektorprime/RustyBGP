@@ -1,5 +1,7 @@
-use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
-use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr};
+use tokio::net::{TcpStream, TcpListener};
+//use std::io::{Read, Write};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use std::path::Path;
 use crate::errors::*;
 use crate::messages::header::*;
@@ -37,11 +39,17 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
 
 
 pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut OpenMessage, peer_ip: Ipv4Addr, hello_time: u16, my_hold_time: u16) -> Result<(usize), BGPError> {
-    for an in &bgp_proc.configured_neighbors {
-        if peer_ip.to_string() == an.ip {
-            return Err(NeighborError::NeighborAlreadyEstablished.into())
-        }
+    // for an in &bgp_proc.active_neighbors {
+    //     if peer_ip.to_string() == an.ip {
+    //         return Err(NeighborError::NeighborAlreadyEstablished.into())
+    //     }
+    // }
+
+    if let Some(n) =  bgp_proc.active_neighbors.get(&peer_ip) {
+        return Err(NeighborError::NeighborAlreadyEstablished.into())
     }
+
+
     let hold_time = if my_hold_time <= open_message.hold_time {
         my_hold_time
     } else {
@@ -54,7 +62,7 @@ pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut O
     Ok(index)
 }
 
-pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
     // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
     // compare the open message params to configured neighbor
     let mut received_open = extract_open_message(tsbuf)?;
@@ -70,8 +78,8 @@ pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc
             add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
             // TODO handle opt params
             let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hello_time, bgp_proc.identifier, 0, None);
-            send_open(tcp_stream, open_message)?;
-            send_keepalive(tcp_stream)?;
+            send_open(tcp_stream, open_message).await?;
+            send_keepalive(tcp_stream).await?;
 
             // TODO REMOVE AFTER TESTING IT WORKS HERE
             let mut path_attributes: Vec<PathAttribute> = Vec::new();
@@ -98,7 +106,7 @@ pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc
                 path_attributes: Some(path_attributes),
                 nlri: Some(nlri),
             };
-            send_update(tcp_stream, update_message)?;
+            send_update(tcp_stream, update_message).await?;
 
             return Ok(())
         }
@@ -110,10 +118,10 @@ pub fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc
     // Ok(())
 
 
-pub fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(), MessageError> {
+pub async fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(), MessageError> {
     println!("Preparing to send Open");
     let message_bytes = message.convert_to_bytes();
-    let res  =stream.write_all(&message_bytes[..]);
+    let res  =stream.write_all(&message_bytes[..]).await;
     match res {
         Ok(_) => {
             println!("Sent Open");
@@ -125,10 +133,10 @@ pub fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(), Mes
     }
 }
 
-pub fn send_update(stream: &mut TcpStream, message: UpdateMessage) -> Result<(), MessageError> {
+pub async fn send_update(stream: &mut TcpStream, message: UpdateMessage) -> Result<(), MessageError> {
     println!("Preparing to send Update");
     let message_bytes = message.convert_to_bytes();
-    let res  =stream.write_all(&message_bytes[..]);
+    let res  =stream.write_all(&message_bytes[..]).await;
     match res {
         Ok(_) => {
             println!("Sent Update");
