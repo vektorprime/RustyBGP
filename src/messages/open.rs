@@ -66,6 +66,40 @@ pub fn get_neighbor_ipv4_address(tcp_stream: &TcpStream) -> Result<Ipv4Addr, Nei
 }
 
 
+pub async fn test_net_advertisements(bgp_proc: &mut BGPProcess, tcp_stream: &mut TcpStream) -> Result<(), MessageError> {
+    let mut path_attributes: Vec<PathAttribute> = Vec::new();
+
+    let origin_pa = PathAttribute::new_origin(OriginType::IGP);
+    path_attributes.push(origin_pa);
+
+    let as_list = vec![2];
+    let as_path_pa = PathAttribute::new_as_path(as_list);
+    path_attributes.push(as_path_pa);
+
+    let next_hop_pa = PathAttribute::new_next_hop(Ipv4Addr::new(10, 0, 0, 3));
+    path_attributes.push(next_hop_pa);
+
+    let mut nlri: Vec<NLRI> = Vec::new();
+    for net in &bgp_proc.configured_networks {
+        nlri.push(net.nlri.clone());
+    }
+    //let nlri = vec![NLRI::new(Ipv4Addr::new(1,1,1,1), 32).unwrap()];
+
+    //let msg_len = 53;
+    let message_header = MessageHeader::new(MessageType::Update, None);
+    let update_message = UpdateMessage {
+        message_header,
+        withdrawn_route_len: 0,
+        withdrawn_routes: None,
+        total_path_attribute_len: 20,
+        path_attributes: Some(path_attributes),
+        nlri: Some(nlri),
+    };
+    send_update(tcp_stream, update_message).await?;
+    
+    Ok(())
+}
+
 pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
     // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
     // compare the open message params to configured neighbor
@@ -83,36 +117,7 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
             send_keepalive(tcp_stream).await?;
 
             // TODO REMOVE AFTER TESTING IT WORKS HERE
-
-            let mut path_attributes: Vec<PathAttribute> = Vec::new();
-
-            let origin_pa = PathAttribute::new_origin(OriginType::IGP);
-            path_attributes.push(origin_pa);
-
-            let as_list = vec![2];
-            let as_path_pa = PathAttribute::new_as_path(as_list);
-            path_attributes.push(as_path_pa);
-
-            let next_hop_pa = PathAttribute::new_next_hop(Ipv4Addr::new(10, 0, 0, 3));
-            path_attributes.push(next_hop_pa);
-
-            let mut nlri: Vec<NLRI> = Vec::new();
-            for net in &bgp_proc.configured_networks {
-                nlri.push(net.nlri.clone());
-            }
-            //let nlri = vec![NLRI::new(Ipv4Addr::new(1,1,1,1), 32).unwrap()];
-
-            let msg_len = 53;
-            let message_header = MessageHeader::new(MessageType::Update, Some(msg_len));
-            let update_message = UpdateMessage {
-                message_header,
-                withdrawn_route_len: 0,
-                withdrawn_routes: None,
-                total_path_attribute_len: 20,
-                path_attributes: Some(path_attributes),
-                nlri: Some(nlri),
-            };
-            send_update(tcp_stream, update_message).await?;
+            test_net_advertisements(bgp_proc, tcp_stream).await?;
 
             return Ok(())
         }
