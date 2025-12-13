@@ -45,11 +45,6 @@ pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut O
     //     }
     // }
 
-    if let Some(n) =  bgp_proc.active_neighbors.get(&peer_ip) {
-        return Err(NeighborError::NeighborAlreadyEstablished.into())
-    }
-
-
     let hold_time = if my_hold_time <= open_message.hold_time {
         my_hold_time
     } else {
@@ -62,19 +57,25 @@ pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut O
     Ok(index)
 }
 
+
+pub fn get_neighbor_ipv4_address(tcp_stream: &TcpStream) -> Result<Ipv4Addr, NeighborError> {
+    match tcp_stream.peer_addr().unwrap().ip() {
+        IpAddr::V4(ip) => Ok(ip),
+        _ => { return Err(NeighborError::NeighborIsIPV6.into())}
+    }
+}
+
+
 pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
     // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
     // compare the open message params to configured neighbor
     let mut received_open = extract_open_message(tsbuf)?;
-    let peer_ip = match tcp_stream.peer_addr().unwrap().ip() {
-        IpAddr::V4(ip) => ip,
-        _ => { return Err(NeighborError::NeighborIsIPV6.into())}
-    };
 
+    let peer_ip = get_neighbor_ipv4_address(tcp_stream)?;
     for cn in &bgp_proc.configured_neighbors {
         // neighbor IP is already checked in previous funcs so it has to be in the list
-
         if peer_ip.to_string() == cn.ip {
+            // TODO only add the neighbor after confirming we completed everything and the TCP session is still up
             add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
             // TODO handle opt params
             let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hello_time, bgp_proc.identifier, 0, None);
