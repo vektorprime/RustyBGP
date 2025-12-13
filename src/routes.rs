@@ -38,7 +38,7 @@ impl NLRI {
     pub fn convert_to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(self.len.to_be_bytes());
-        bytes.extend(self.prefix.to_bits().to_le_bytes());
+        bytes.extend(self.prefix.to_bits().to_be_bytes());
         bytes
     }
 

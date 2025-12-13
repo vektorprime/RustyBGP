@@ -40,5 +40,5 @@ pub struct NeighborConfig {
 #[derive(Debug, Deserialize)]
 pub struct NetAdvertisementsConfig {
     #[serde(rename = "prefix")]
-    nlri: NLRI
+    pub nlri: NLRI
 }

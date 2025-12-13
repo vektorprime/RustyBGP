@@ -83,6 +83,7 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
             send_keepalive(tcp_stream).await?;
 
             // TODO REMOVE AFTER TESTING IT WORKS HERE
+
             let mut path_attributes: Vec<PathAttribute> = Vec::new();
 
             let origin_pa = PathAttribute::new_origin(OriginType::IGP);
@@ -95,9 +96,13 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
             let next_hop_pa = PathAttribute::new_next_hop(Ipv4Addr::new(10, 0, 0, 3));
             path_attributes.push(next_hop_pa);
 
-            let nlri = vec![NLRI::new(Ipv4Addr::new(1,1,1,1), 32).unwrap()];
+            let mut nlri: Vec<NLRI> = Vec::new();
+            for net in &bgp_proc.configured_networks {
+                nlri.push(net.nlri.clone());
+            }
+            //let nlri = vec![NLRI::new(Ipv4Addr::new(1,1,1,1), 32).unwrap()];
 
-            let msg_len = 48;
+            let msg_len = 53;
             let message_header = MessageHeader::new(MessageType::Update, Some(msg_len));
             let update_message = UpdateMessage {
                 message_header,

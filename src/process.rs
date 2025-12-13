@@ -88,7 +88,7 @@ impl BGPProcess {
     }
 
     pub fn handle_tcp_event(&mut self) {
-
+        // maybe at some point I will react to TCP events, or I'll rely on errors from write or read
     }
 
     pub async fn run(bgp_proc: Arc<Mutex<BGPProcess>>) {
