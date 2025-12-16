@@ -32,7 +32,7 @@ pub struct BGPProcess {
     pub(crate) my_as: u16,
     pub(crate) identifier: Ipv4Addr,
     //pub active_neighbors: Vec<Neighbor>,
-    pub active_neighbors: HashMap<Ipv4Addr, Neighbor>,
+    pub established_neighbors: HashMap<Ipv4Addr, Neighbor>,
     pub configured_neighbors: Vec<NeighborConfig>,
     pub configured_networks: Vec<NetAdvertisementsConfig>,
 }
@@ -45,19 +45,25 @@ impl BGPProcess {
             my_as: config.process_config.my_as,
             identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap(),
             //active_neighbors: Vec::new(),
-            active_neighbors: HashMap::new(),
+            established_neighbors: HashMap::new(),
             configured_neighbors: config.neighbors_config,
             configured_networks: config.net_advertisements_config,
         }
     }
 
     pub fn is_neighbor_established(&self, peer_ip: Ipv4Addr) -> bool {
-        if let Some(_) =  self.active_neighbors.get(&peer_ip) {
+        if let Some(_) =  self.established_neighbors.get(&peer_ip) {
             return false
         }
         true
     }
 
+    pub fn remove_established_neighbor(&mut self, ip: Ipv4Addr) -> Result<(), NeighborError> {
+        if let None = self.established_neighbors.remove(&ip) {
+            return Err(NeighborError::UnableToRemoveNeighbor)
+        }
+        Ok(())
+    }
 
     pub fn validate_neighbor_ip(&mut self, peer_ip: IpAddr) -> Result<(), NeighborError> {
         // we don't have enough info to add the neighbor yet, so we just validate the IP for now

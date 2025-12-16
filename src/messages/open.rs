@@ -62,9 +62,9 @@ pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut O
     };
 
     let neighbor = Neighbor::new(peer_ip, AS::AS2(open_message.as_number), hello_time, hold_time, peer_type)?;
-    let index = bgp_proc.active_neighbors.len();
+    let index = bgp_proc.established_neighbors.len();
     //bgp_proc.active_neighbors.push(neighbor);
-    bgp_proc.active_neighbors.insert(peer_ip, neighbor);
+    bgp_proc.established_neighbors.insert(peer_ip, neighbor);
     Ok(index)
 }
 
@@ -123,7 +123,7 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
             // TODO only add the neighbor after confirming we completed everything and the TCP session is still up
 
             // TODO handle opt params
-            let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hold_time_sec, bgp_proc.identifier, 0, None)?;
+            let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, bgp_proc.established_neighbors.get(&peer_ip).unwrap().hold_time_sec, bgp_proc.identifier, 0, None)?;
             send_open(tcp_stream, open_message).await?;
             send_keepalive(tcp_stream).await?;
             add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;

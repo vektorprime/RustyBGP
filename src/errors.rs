@@ -9,7 +9,8 @@ pub enum NeighborError {
     ConfiguredNeighborsEmpty,
     PeerIPNotEstablished,
     NeighborAlreadyEstablished,
-    Message(MessageError)
+    UnableToRemoveNeighbor,
+    //Message(MessageError)
 }
 
 #[derive(PartialEq, Debug)]
@@ -32,6 +33,7 @@ pub enum MessageError {
     UpdateMessageLenTooLow,
     HelloTimeLessThanOne,
     HoldTimeLessThanThreeAndNotZero,
+
 }
 
 #[derive(PartialEq, Debug)]
@@ -64,6 +66,6 @@ impl From<MessageError> for BGPError {
 }
 
 
-impl From<MessageError> for NeighborError {
-    fn from(e: MessageError) -> NeighborError {NeighborError::Message(e)}
-}
+// impl From<MessageError> for NeighborError {
+//     fn from(e: MessageError) -> NeighborError {NeighborError::Message(e)}
+// }
