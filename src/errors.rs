@@ -10,6 +10,7 @@ pub enum NeighborError {
     PeerIPNotEstablished,
     NeighborAlreadyEstablished,
     UnableToRemoveNeighbor,
+    ConfiguredNeighborNotFound
     //Message(MessageError)
 }
 

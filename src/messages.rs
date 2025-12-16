@@ -7,9 +7,11 @@ pub mod open;
 pub mod header;
 pub mod update;
 mod route_refresh;
+mod notification;
 
 use keepalive::*;
 use open::*;
+use notification::*;
 
 use update::*;
 use crate::errors::{BGPError, MessageError};
@@ -126,6 +128,8 @@ pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, MessageError> {
 
 
 
+
+
 pub fn locate_marker_in_message(tsbuf: &[u8], migrated_data_len: usize) -> Result<(), MessageError> {
 
     for i in migrated_data_len + 0..migrated_data_len + 16 {
@@ -203,7 +207,7 @@ pub async fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbu
             handle_update_message(tcp_stream, tsbuf, bgp_proc).await?
         },
         MessageType::Notification => {
-            // TODO handle_notification_message
+            handle_notification_message(tcp_stream, tsbuf, bgp_proc).await?;
         },
         MessageType::Keepalive => {
             handle_keepalive_message(tcp_stream).await?

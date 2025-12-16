@@ -3,7 +3,9 @@
 //
 // }
 
-use crate::errors::MessageError;
+use std::net::{IpAddr, Ipv4Addr};
+use tokio::net::TcpStream;
+use crate::errors::{MessageError, NeighborError};
 
 pub fn extract_u32_from_bytes(tsbuf: &Vec<u8>, start_index: usize, end_index: usize) -> Result<u32, MessageError> {
     match tsbuf.get(start_index..end_index) {
@@ -23,5 +25,15 @@ pub fn extract_u8_from_byte(tsbuf: &Vec<u8>, start_index: usize, end_index: usiz
     match tsbuf.get(start_index..end_index) {
         Some(bytes) => { Ok(u8::from_be_bytes(bytes.try_into().map_err(|_| MessageError::BadInt8Read)?)) },
         None => { Err(MessageError::BadInt8Read) }
+    }
+}
+
+
+pub fn get_neighbor_ipv4_address(peer_ip: IpAddr) -> Result<Ipv4Addr, NeighborError> {
+    if let IpAddr::V4(ip) = peer_ip  {
+        Ok(ip)
+    }
+    else {
+         Err(NeighborError::NeighborIsIPV6.into())
     }
 }

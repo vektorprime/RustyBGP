@@ -13,6 +13,8 @@ use crate::messages::*;
 use crate::neighbors::*;
 use crate::config::*;
 use crate::errors::{NeighborError};
+use crate::messages::open::get_neighbor_ipv4_address_from_stream;
+use crate::utils::*;
 
 async fn start_tcp(address: String, port: String) -> TcpListener {
     let listener = TcpListener::bind(address + ":" + &port).await;
@@ -51,18 +53,34 @@ impl BGPProcess {
         }
     }
 
+    pub fn get_neighbor_config(&self, ipv4addr: Ipv4Addr) -> Result<NeighborConfig, NeighborError> {
+        let ip = ipv4addr.to_string();
+        for cn in &self.configured_neighbors {
+            if ip == cn.ip {
+                return Ok(cn.clone());
+            }
+        }
+        Err(NeighborError::ConfiguredNeighborNotFound)
+    }
+
     pub fn is_neighbor_established(&self, peer_ip: Ipv4Addr) -> bool {
         if let Some(_) =  self.established_neighbors.get(&peer_ip) {
-            return false
+            return true
         }
-        true
+        false
     }
 
     pub fn remove_established_neighbor(&mut self, ip: Ipv4Addr) -> Result<(), NeighborError> {
-        if let None = self.established_neighbors.remove(&ip) {
-            return Err(NeighborError::UnableToRemoveNeighbor)
+        match self.established_neighbors.remove(&ip) {
+            Some(_) => {
+                println!("Removed neighbor : {}", ip.to_string());
+                Ok(())
+            },
+            None => {
+                println!("ERROR: {:#?}", NeighborError::UnableToRemoveNeighbor);
+                Err(NeighborError::UnableToRemoveNeighbor)
+            }
         }
-        Ok(())
     }
 
     pub fn validate_neighbor_ip(&mut self, peer_ip: IpAddr) -> Result<(), NeighborError> {
@@ -73,20 +91,15 @@ impl BGPProcess {
         }
         for cn in &self.configured_neighbors {
             println!("Found configured neighbor");
-            if let IpAddr::V4(ip) = peer_ip {
-                if peer_ip.to_string() == cn.ip {
-                    if self.is_neighbor_established(ip) {
-                        return Err(NeighborError::NeighborAlreadyEstablished)
-                    }
-                    return Ok(())
-                }
-                else {
-                    return Err(NeighborError::PeerIPNotRecognized)
-                }
+            let ip = get_neighbor_ipv4_address(peer_ip)?;
+            if ip.to_string() == cn.ip {
+                return Ok(())
             }
             else {
-                return Err(NeighborError::NeighborIsIPV6)
+                return Err(NeighborError::PeerIPNotRecognized)
             }
+
+
         }
 
        Err(NeighborError::ConfiguredNeighborsEmpty)
@@ -99,50 +112,64 @@ impl BGPProcess {
 
     pub async fn run(bgp_proc: Arc<Mutex<BGPProcess>>, address: String, port: String) {
         //let mut connection_buffers: Vec<Vec<u8>> = Vec::new();
-
         let listener = start_tcp(address, port).await;
         loop {
             match listener.accept().await {
                 Ok((mut ts, sa)) => {
+                    let bgp_proc = Arc::clone(&bgp_proc);
                     println!("TCP connection established from {}", sa.ip().to_string());
                     let peer_ip = ts.peer_addr().unwrap().ip();
                     {
-                        let mut bgp_ulock = bgp_proc.lock().await;
-                        if let Err(e) = bgp_ulock.validate_neighbor_ip(peer_ip) {
+                        let mut bgp = bgp_proc.lock().await;
+                        if let Err(e) = bgp.validate_neighbor_ip(peer_ip) {
                             println!("Error validating neighbor IP: {:#?}", e);
                         }
                         println!("Validated neighbor IP");
                     }
 
-                    let bgp = Arc::clone(&bgp_proc);
+
                     //check if I've sent all active neighbors updates
 
-                    // loop {
-                    //
-                    // }
                     tokio::spawn(async move {
+                        // max bgp msg size should never exceed 4096
+                        // TODO determine if we want to honor the above rule or not, if not, how should we handle it
                         let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
                         loop {
                             ts.readable().await.unwrap();
                             //read tcp stream into buf and save size read
+                            let ip = match get_neighbor_ipv4_address_from_stream(&ts) {
+                                Ok(i) => i,
+                                Err(_) => {continue}
+                            };
                             match ts.try_read_buf(&mut tsbuf) {
                                 Ok(0) => {
-                                    // TODO handle connection closing here
+                                    {
+                                        let mut bgp = bgp_proc.lock().await;
+                                        if bgp.is_neighbor_established(ip) {
+                                            if let Err(e) = bgp.remove_established_neighbor(ip) {
+                                                println!("ERROR: {:#?}", e);
+                                            }
+                                        }
+                                    }
                                 },
                                 Ok(size) => {
-
                                     println!("Read {} bytes from the stream. ", size);
                                     let hex = tsbuf[..size]
                                         .iter()
                                         .map(|b| format!("{:02X} ", b))
                                         .collect::<String>();
                                     println!("Data read from the stream: {}", hex);
+                                    // min valid bgp msg len is 19 bytes
+                                    if tsbuf.len() < 19 {
+                                        println!("Data in stream too low to be a valid message, skipping: {}", hex);
+                                        continue;
+                                    }
                                     match extract_messages_from_rec_data(&tsbuf[..size]) {
                                         Ok(messages) => {
                                             for m in &messages {
                                                 {
-                                                    let mut bgp_ulock = bgp.lock().await;
-                                                    match route_incomming_message_to_handler(&mut ts, m, &mut *bgp_ulock).await {
+                                                    let mut bgp = bgp_proc.lock().await;
+                                                    match route_incomming_message_to_handler(&mut ts, m, &mut *bgp).await {
                                                         Ok(_) => {},
                                                         Err(e) => {
                                                             println!("Error handling message: {:#?}", e);
@@ -161,8 +188,16 @@ impl BGPProcess {
                                     if e.kind() == io::ErrorKind::WouldBlock {
                                         continue;
                                     } else {
-                                        println!("Error : {:#?}", e)
-                                        // TODO handle connection error here
+                                        println!("Error : {:#?}", e);
+                                        {
+                                            let mut bgp = bgp_proc.lock().await;
+                                            if bgp.is_neighbor_established(ip) {
+                                                if let Err(e) = bgp.remove_established_neighbor(ip) {
+                                                    println!("ERROR: {:#?}", e);
+                                                }
+                                            }
+                                        }
+                                        break;
                                         //return Err(e.into());
                                     }
                                 }
@@ -173,7 +208,9 @@ impl BGPProcess {
                         }
                     });
                 },
-                Err(e) => { println!("Error : {:#?}", e) }
+                Err(e) => {
+                    println!("Error : {:#?}", e);
+                }
             }
         }
     }

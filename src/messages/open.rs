@@ -69,7 +69,7 @@ pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut O
 }
 
 
-pub fn get_neighbor_ipv4_address(tcp_stream: &TcpStream) -> Result<Ipv4Addr, NeighborError> {
+pub fn get_neighbor_ipv4_address_from_stream(tcp_stream: &TcpStream) -> Result<Ipv4Addr, NeighborError> {
     match tcp_stream.peer_addr().unwrap().ip() {
         IpAddr::V4(ip) => Ok(ip),
         _ => { return Err(NeighborError::NeighborIsIPV6.into())}
@@ -116,14 +116,19 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
     // compare the open message params to configured neighbor
     let mut received_open = extract_open_message(tsbuf)?;
 
-    let peer_ip = get_neighbor_ipv4_address(tcp_stream)?;
+    let peer_ip = get_neighbor_ipv4_address_from_stream(tcp_stream)?;
+
+    if bgp_proc.is_neighbor_established(peer_ip) {
+        return Err(NeighborError::NeighborAlreadyEstablished.into())
+    }
+
     for cn in &bgp_proc.configured_neighbors {
         // neighbor IP is already checked in previous funcs so it has to be in the list
         if peer_ip.to_string() == cn.ip {
-            // TODO only add the neighbor after confirming we completed everything and the TCP session is still up
-
             // TODO handle opt params
-            let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, bgp_proc.established_neighbors.get(&peer_ip).unwrap().hold_time_sec, bgp_proc.identifier, 0, None)?;
+            //let hold_time_sec = bgp_proc.established_neighbors.get(&peer_ip).unwrap().hold_time_sec;
+            let hold_time_sec = bgp_proc.get_neighbor_config(peer_ip)?.hold_time;
+            let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, hold_time_sec, bgp_proc.identifier, 0, None)?;
             send_open(tcp_stream, open_message).await?;
             send_keepalive(tcp_stream).await?;
             add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
@@ -133,7 +138,6 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
 
             return Ok(())
         }
-
     }
     return Err(NeighborError::PeerIPNotRecognized.into())
 }

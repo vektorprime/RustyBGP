@@ -29,7 +29,7 @@ pub struct ProcessConfig {
 }
 
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct NeighborConfig {
     pub ip: String,
     pub as_num: u16,

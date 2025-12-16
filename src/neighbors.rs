@@ -24,7 +24,7 @@ pub enum PeerType {
 
 #[derive(Debug)]
 pub struct Neighbor {
-    pub state: FSM,
+    pub fsm: FSM,
     //ip_type: IPType,
     pub ip: Ipv4Addr,
     pub as_num: AS,
@@ -61,7 +61,7 @@ impl Neighbor {
         };
 
         Ok(Neighbor {
-            state: FSM::default(),
+            fsm: FSM::default(),
             ip,
             as_num,
             hello_time_sec,
