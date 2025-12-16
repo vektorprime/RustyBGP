@@ -28,13 +28,50 @@ pub struct Neighbor {
     //ip_type: IPType,
     pub ip: Ipv4Addr,
     pub as_num: AS,
-    pub hello_time: u16,
-    pub hold_time: Option<Timer>,
+    pub hello_time_sec: u16,
+    pub hold_time_sec: u16,
+    pub hold_timer: Option<Timer>,
     pub routes_v4: Vec<RouteV4>,
     pub peer_type: PeerType,
 }
 
 impl Neighbor {
+
+    pub fn new(ip: Ipv4Addr, as_num: AS, hello_time_sec: u16, hold_time_sec: u16, peer_type: PeerType) -> Result<Neighbor, MessageError> {
+        //pub fn new(ip: IpAddr, hold_time_sec: u16, keepalive_time_sec: u16) -> Result<Neighbor, NeighborError> {
+        // if keepalive_time_sec > hold_time_sec {
+        //     return Err(NeighborError::KeepaliveGreaterThanHoldTime)
+        // }
+        // else if keepalive_time_sec == hold_time_sec {
+        //     return Err(NeighborError::KeepaliveEqualToHoldTime)
+        // }
+
+        if hello_time_sec < 1 {
+            return Err(MessageError::HelloTimeLessThanOne);
+        }
+
+        if hold_time_sec < 3 && hold_time_sec != 0 {
+            return Err(MessageError::HoldTimeLessThanThreeAndNotZero);
+        }
+
+        let hold_timer = if hold_time_sec == 0 {
+            None
+        } else {
+            Some(Timer::new(hold_time_sec))
+        };
+
+        Ok(Neighbor {
+            state: FSM::default(),
+            ip,
+            as_num,
+            hello_time_sec,
+            hold_time_sec,
+            hold_timer,
+            routes_v4: Vec::new(),
+            peer_type
+        })
+
+    }
 
     pub fn process_routes_from_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
 
@@ -116,33 +153,5 @@ impl Neighbor {
 
 
     }
-    pub fn new(ip: Ipv4Addr, as_num: AS, hello_time_sec: u16, hold_time_sec: u16, peer_type: PeerType) -> Neighbor {
-    //pub fn new(ip: IpAddr, hold_time_sec: u16, keepalive_time_sec: u16) -> Result<Neighbor, NeighborError> {
-        // if keepalive_time_sec > hold_time_sec {
-        //     return Err(NeighborError::KeepaliveGreaterThanHoldTime)
-        // }
-        // else if keepalive_time_sec == hold_time_sec {
-        //     return Err(NeighborError::KeepaliveEqualToHoldTime)
-        // }
 
-        let hold_time = if hold_time_sec == 0 {
-            None
-        } else {
-            Some(Timer::new(hold_time_sec))
-        };
-
-
-         Neighbor {
-            state: FSM::default(),
-            ip,
-            as_num,
-            // TODO replace this with better logic
-            hello_time: hello_time_sec,
-            hold_time,
-            routes_v4: Vec::new(),
-             peer_type
-        }
-
-
-    }
 }

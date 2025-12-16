@@ -29,7 +29,9 @@ pub enum MessageError {
     MissingNLRI,
     MissingPathAttributes,
     MessageHeaderBadLen,
-    UpdateMessageLenTooLow
+    UpdateMessageLenTooLow,
+    HelloTimeLessThanOne,
+    HoldTimeLessThanThreeAndNotZero,
 }
 
 #[derive(PartialEq, Debug)]
