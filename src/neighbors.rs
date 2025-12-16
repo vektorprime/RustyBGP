@@ -105,10 +105,9 @@ impl Neighbor {
             for nlri in &nlri_coll {
                 // debating if I should do the checks here or move more logic into new()
                 let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone() );
-                print!("Adding Route {:#?} to vec", rt);
+                println!("Adding Route {:#?} to vec", rt);
                 self.routes_v4.push(rt);
             }
-
             Ok(())
         }
         else {

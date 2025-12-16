@@ -102,7 +102,6 @@ pub struct OptionalParameter {
 }
 
 pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, MessageError> {
-    // TODO gracefully exit without panic
     match tsbuf.get(0..16) {
         Some(val) => {
             if val == [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,

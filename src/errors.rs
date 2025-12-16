@@ -28,7 +28,8 @@ pub enum MessageError {
     PeerIPNotEstablished,
     MissingNLRI,
     MissingPathAttributes,
-    MessageHeaderBadLen
+    MessageHeaderBadLen,
+    UpdateMessageLenTooLow
 }
 
 #[derive(PartialEq, Debug)]

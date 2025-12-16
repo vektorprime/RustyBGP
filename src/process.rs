@@ -14,8 +14,8 @@ use crate::neighbors::*;
 use crate::config::*;
 use crate::errors::{NeighborError};
 
-async fn start_tcp(port: &str) -> TcpListener {
-    let listener = TcpListener::bind("0.0.0.0:".to_owned() + port).await;
+async fn start_tcp(address: String, port: String) -> TcpListener {
+    let listener = TcpListener::bind(address + ":" + &port).await;
     match listener {
         Ok(tcp) => {
             println!("TCP server started on port {} ", port);
@@ -91,10 +91,10 @@ impl BGPProcess {
         // maybe at some point I will react to TCP events, or I'll rely on errors from write or read
     }
 
-    pub async fn run(bgp_proc: Arc<Mutex<BGPProcess>>) {
+    pub async fn run(bgp_proc: Arc<Mutex<BGPProcess>>, address: String, port: String) {
         //let mut connection_buffers: Vec<Vec<u8>> = Vec::new();
 
-        let listener = start_tcp("179").await;
+        let listener = start_tcp(address, port).await;
         loop {
             match listener.accept().await {
                 Ok((mut ts, sa)) => {
@@ -110,17 +110,19 @@ impl BGPProcess {
 
                     let bgp = Arc::clone(&bgp_proc);
                     //check if I've sent all active neighbors updates
-                    //ts.readable().await;
+
                     // loop {
                     //
                     // }
                     tokio::spawn(async move {
+                        let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
                         loop {
-                            let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
-
+                            ts.readable().await.unwrap();
                             //read tcp stream into buf and save size read
                             match ts.try_read_buf(&mut tsbuf) {
-                                Ok(0) => {},
+                                Ok(0) => {
+                                    // TODO handle connection closing here
+                                },
                                 Ok(size) => {
 
                                     println!("Read {} bytes from the stream. ", size);
@@ -154,18 +156,16 @@ impl BGPProcess {
                                         continue;
                                     } else {
                                         println!("Error : {:#?}", e)
+                                        // TODO handle connection error here
                                         //return Err(e.into());
                                     }
                                 }
                                 //let size = ts.read(&mut tsbuf[..]).unwrap();
                                 //println!("Data read from the stream: {:#x?}", &tsbuf.get(..size).unwrap());
                             }
+                            tsbuf.clear();
                         }
-
-
                     });
-
-
                 },
                 Err(e) => { println!("Error : {:#?}", e) }
             }

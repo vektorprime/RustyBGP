@@ -30,7 +30,7 @@ pub fn validate_neighbor_is_established(ts: &TcpStream, bgp_proc: &BGPProcess) -
 
 
 pub async fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), NeighborError> {
-    println!("handling update message");
+    println!("Handling update message");
     let ip = validate_neighbor_is_established(tcp_stream, bgp_proc)?;
     let update_message = extract_update_message(tsbuf)?;
     let mut neighbor = bgp_proc.active_neighbors.get_mut(&ip).unwrap();
@@ -697,8 +697,11 @@ pub struct UpdateMessage {
 
 pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageError> {
     // TODO I only copied this, I have not modified it yet
-    println!("extracting update message");
+    println!("Extracting update message");
     let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
+    if message_len < 23 {
+        return Err(MessageError::UpdateMessageLenTooLow)
+    }
     //println!("message_len: {}", message_len);
     let withdrawn_route_len = extract_u16_from_bytes(tsbuf, 19, 21)?;
     //println!("withdrawn route len is : {}", withdrawn_route_len);
@@ -781,7 +784,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
                 for x in 0..len as usize {
                     match tsbuf.get(current_idx + x) {
                         Some(byte) => { bytes.push(*byte); },
-                        None => { print!("{:#?}", MessageError::InvalidBufferIndex) } // should not return error, just pass
+                        None => { println!("{:#?}", MessageError::InvalidBufferIndex) } // should not return error, just pass
                     }
                 }
                 bytes

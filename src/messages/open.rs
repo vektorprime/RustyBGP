@@ -24,6 +24,10 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
         None => { return Err(MessageError::BadBGPVersion) }
     };
 
+    if version != BGPVersion::V4 {
+        return Err(MessageError::BadBGPVersion)
+    }
+
     let as_number = extract_u16_from_bytes(tsbuf, 20, 22)?;
 
     let hold_time = extract_u16_from_bytes(tsbuf, 22, 24)?;
@@ -31,7 +35,7 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
     let identifier = Ipv4Addr::from_bits(extract_u32_from_bytes(tsbuf, 30, 34)?);
 
     // TODO read and process the optional params
-    let open_message = OpenMessage::new(as_number, hold_time, identifier, 0, None)?;
+    let open_message = OpenMessage::new(BGPVersion::V4, as_number, hold_time, identifier, 0, None)?;
 
     Ok(open_message)
 
@@ -119,7 +123,7 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
             // TODO only add the neighbor after confirming we completed everything and the TCP session is still up
             add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
             // TODO handle opt params
-            let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hello_time, bgp_proc.identifier, 0, None)?;
+            let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hello_time, bgp_proc.identifier, 0, None)?;
             send_open(tcp_stream, open_message).await?;
             send_keepalive(tcp_stream).await?;
 
@@ -180,13 +184,13 @@ pub struct OpenMessage {
 
 
 impl OpenMessage {
-    pub fn new(as_number: u16, hold_time: u16, identifier: Ipv4Addr, optional_parameters_length: u8, optional_parameters: Option<Vec<OptionalParameter>> ) -> Result<Self, MessageError> {
+    pub fn new(version: BGPVersion, as_number: u16, hold_time: u16, identifier: Ipv4Addr, optional_parameters_length: u8, optional_parameters: Option<Vec<OptionalParameter>> ) -> Result<Self, MessageError> {
         // 28 bytes base without params
         let message_header_len_field = 28 + optional_parameters_length as u16;
         let message_header = MessageHeader::new(MessageType::Open, Some(message_header_len_field))?;
         Ok(OpenMessage {
             message_header,
-            version: BGPVersion::V4,
+            version,
             as_number,
             hold_time,
             identifier,

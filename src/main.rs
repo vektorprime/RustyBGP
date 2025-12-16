@@ -20,12 +20,15 @@ mod timers;
 mod errors;
 mod config;
 
+
 #[tokio::main]
 async fn main()  {
     //let mut bgp = BGPProcess::new("bgp_config.toml".to_string());
     let mut bgp: Arc<Mutex<BGPProcess>> = Arc::new(Mutex::new(BGPProcess::new("bgp_config.toml".to_string())));
     println!("{:#?}", bgp);
-    BGPProcess::run(bgp).await;
+    // todo read the IP and port from config file
+    BGPProcess::run(bgp, "10.0.0.3".to_string(), "179".to_string()).await;
+
 }
 
 
