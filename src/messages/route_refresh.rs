@@ -31,13 +31,14 @@ pub fn handle_route_refresh_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>)
     Ok(())
 }
 
-pub async fn send_route_refresh(stream: &mut TcpStream, afi: AddressFamily, safi: SAFI) {
+pub async fn send_route_refresh(stream: &mut TcpStream, afi: AddressFamily, safi: SAFI) -> Result<(), MessageError> {
     // TODO
     println!("Preparing to send RouteRefresh");
-    let message = RouteRefreshMessage::new(afi, safi);
+    let message = RouteRefreshMessage::new(afi, safi)?;
     let message_bytes = message.convert_to_bytes();
     stream.write_all(&message_bytes[..]).await.unwrap();
     println!("Sent RouteRefresh");
+    Ok(())
 }
 
 #[derive(PartialEq, Debug)]
@@ -57,14 +58,14 @@ pub struct RouteRefreshMessage {
 }
 
 impl RouteRefreshMessage {
-    pub fn new(afi: AddressFamily, safi: SAFI) -> Self {
+    pub fn new(afi: AddressFamily, safi: SAFI) -> Result<Self, MessageError> {
         // Route refresh is always 23 bytes
-        let message_header = MessageHeader::new(MessageType::RouteRefresh, Some(23));
-        RouteRefreshMessage {
-            message_header,
-            afi,
-            safi
-        }
+        let message_header = MessageHeader::new(MessageType::RouteRefresh, Some(23))?;
+       Ok(RouteRefreshMessage {
+           message_header,
+           afi,
+           safi
+       })
     }
 
     pub fn convert_to_bytes(&self) -> Vec<u8> {

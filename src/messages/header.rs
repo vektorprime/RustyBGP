@@ -16,10 +16,17 @@ impl fmt::Display for MessageHeader  {
 }
 
 impl MessageHeader {
-    pub fn new(message_type: MessageType, len: Option<u16>) -> MessageHeader {
+    pub fn new(message_type: MessageType, len: Option<u16>) -> Result<Self, MessageError> {
         let marker: [u8; 16] = [0xFF; 16];
         let length = match len {
-            Some(l) => l,
+            Some(l) => {
+                if l >= 19 && l <= 4096 {
+                    l
+                }
+                else {
+                    return Err(MessageError::MessageHeaderBadLen)
+                }
+            },
             None => {
                 match message_type {
                     MessageType::Keepalive => 19,
@@ -29,11 +36,11 @@ impl MessageHeader {
                 }
             }
         };
-
-        MessageHeader {
+        Ok(MessageHeader {
             marker,
             length,
             message_type
-        }
+        })
+
     }
 }

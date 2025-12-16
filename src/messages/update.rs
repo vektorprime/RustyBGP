@@ -816,7 +816,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
 
     let nlri = extract_nlri_from_update_message(tsbuf, message_len as usize, &mut current_idx);
     // TODO read and process the optional params
-    let update_message = UpdateMessage::new(message_len, withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, nlri );
+    let update_message = UpdateMessage::new(message_len, withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, nlri)?;
 
     Ok(update_message)
 
@@ -871,17 +871,18 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
 }
 
 impl UpdateMessage {
-    pub fn new(message_len: u16, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, nlri: Option<Vec<NLRI>> ) -> Self {
-        let message_header = MessageHeader::new(MessageType::Update, Some(message_len));
+    pub fn new(message_len: u16, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, nlri: Option<Vec<NLRI>> ) -> Result<Self, MessageError> {
+        let message_header = MessageHeader::new(MessageType::Update, Some(message_len))?;
 
-        UpdateMessage {
+        Ok(UpdateMessage {
             message_header,
             withdrawn_route_len,
             withdrawn_routes,
             total_path_attribute_len,
             path_attributes,
             nlri
-        }
+        })
+
     }
 
     pub fn convert_to_bytes(&self) -> Vec<u8> {

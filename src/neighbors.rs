@@ -10,13 +10,17 @@ use crate::errors::BGPError::Message;
 use crate::routes::RouteV4;
 
 
-
 #[derive(Debug)]
 pub enum IPType {
     V4,
     V6
 }
 
+#[derive(Debug)]
+pub enum PeerType {
+    Internal,
+    External
+}
 
 #[derive(Debug)]
 pub struct Neighbor {
@@ -27,6 +31,7 @@ pub struct Neighbor {
     pub hello_time: u16,
     pub hold_time: Option<Timer>,
     pub routes_v4: Vec<RouteV4>,
+    pub peer_type: PeerType,
 }
 
 impl Neighbor {
@@ -112,7 +117,7 @@ impl Neighbor {
 
 
     }
-    pub fn new(ip: Ipv4Addr, as_num: AS, hello_time_sec: u16, hold_time_sec: u16) -> Neighbor {
+    pub fn new(ip: Ipv4Addr, as_num: AS, hello_time_sec: u16, hold_time_sec: u16, peer_type: PeerType) -> Neighbor {
     //pub fn new(ip: IpAddr, hold_time_sec: u16, keepalive_time_sec: u16) -> Result<Neighbor, NeighborError> {
         // if keepalive_time_sec > hold_time_sec {
         //     return Err(NeighborError::KeepaliveGreaterThanHoldTime)
@@ -136,6 +141,7 @@ impl Neighbor {
             hello_time: hello_time_sec,
             hold_time,
             routes_v4: Vec::new(),
+             peer_type
         }
 
 

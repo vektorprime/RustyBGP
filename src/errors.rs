@@ -27,7 +27,8 @@ pub enum MessageError {
     BadBGPVersion,
     PeerIPNotEstablished,
     MissingNLRI,
-    MissingPathAttributes
+    MissingPathAttributes,
+    MessageHeaderBadLen
 }
 
 #[derive(PartialEq, Debug)]

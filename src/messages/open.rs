@@ -7,7 +7,7 @@ use crate::errors::*;
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
-use crate::neighbors::Neighbor;
+use crate::neighbors::{Neighbor, PeerType};
 use crate::routes::NLRI;
 use crate::utils::*;
 
@@ -31,7 +31,7 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
     let identifier = Ipv4Addr::from_bits(extract_u32_from_bytes(tsbuf, 30, 34)?);
 
     // TODO read and process the optional params
-    let open_message = OpenMessage::new(as_number, hold_time, identifier, 0, None);
+    let open_message = OpenMessage::new(as_number, hold_time, identifier, 0, None)?;
 
     Ok(open_message)
 
@@ -50,7 +50,14 @@ pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut O
     } else {
         open_message.hold_time
     };
-    let neighbor = Neighbor::new(peer_ip, AS::AS2(open_message.as_number), hello_time, hold_time);
+
+    let peer_type = if bgp_proc.my_as == open_message.as_number {
+        PeerType::Internal
+    }  else {
+        PeerType::External
+    };
+
+    let neighbor = Neighbor::new(peer_ip, AS::AS2(open_message.as_number), hello_time, hold_time, peer_type);
     let index = bgp_proc.active_neighbors.len();
     //bgp_proc.active_neighbors.push(neighbor);
     bgp_proc.active_neighbors.insert(peer_ip, neighbor);
@@ -86,7 +93,7 @@ pub async fn test_net_advertisements(bgp_proc: &mut BGPProcess, tcp_stream: &mut
     //let nlri = vec![NLRI::new(Ipv4Addr::new(1,1,1,1), 32).unwrap()];
 
     //let msg_len = 53;
-    let message_header = MessageHeader::new(MessageType::Update, None);
+    let message_header = MessageHeader::new(MessageType::Update, None)?;
     let update_message = UpdateMessage {
         message_header,
         withdrawn_route_len: 0,
@@ -112,7 +119,7 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
             // TODO only add the neighbor after confirming we completed everything and the TCP session is still up
             add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
             // TODO handle opt params
-            let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hello_time, bgp_proc.identifier, 0, None);
+            let open_message = OpenMessage::new(bgp_proc.my_as, bgp_proc.active_neighbors.get(&peer_ip).unwrap().hello_time, bgp_proc.identifier, 0, None)?;
             send_open(tcp_stream, open_message).await?;
             send_keepalive(tcp_stream).await?;
 
@@ -173,11 +180,11 @@ pub struct OpenMessage {
 
 
 impl OpenMessage {
-    pub fn new(as_number: u16, hold_time: u16, identifier: Ipv4Addr, optional_parameters_length: u8, optional_parameters: Option<Vec<OptionalParameter>> ) -> Self {
+    pub fn new(as_number: u16, hold_time: u16, identifier: Ipv4Addr, optional_parameters_length: u8, optional_parameters: Option<Vec<OptionalParameter>> ) -> Result<Self, MessageError> {
         // 28 bytes base without params
         let message_header_len_field = 28 + optional_parameters_length as u16;
-        let message_header = MessageHeader::new(MessageType::Open, Some(message_header_len_field));
-        OpenMessage {
+        let message_header = MessageHeader::new(MessageType::Open, Some(message_header_len_field))?;
+        Ok(OpenMessage {
             message_header,
             version: BGPVersion::V4,
             as_number,
@@ -185,7 +192,7 @@ impl OpenMessage {
             identifier,
             optional_parameters_length,
             optional_parameters
-        }
+        })
     }
     pub fn convert_to_bytes(&self) -> Vec<u8> {
         //let message_header_len_field = 28 + optional_parameters_length as u16;

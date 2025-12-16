@@ -14,7 +14,7 @@ pub async fn send_keepalive(stream: &mut TcpStream) -> Result<(), MessageError> 
     //TODO add peer as input var and match against DB
     //TODO add periodic keepalives
     println!("Preparing to send Keepalive");
-    let message = KeepaliveMessage::new();
+    let message = KeepaliveMessage::new()?;
     let message_bytes = message.convert_to_bytes();
     let ts = stream.write_all(&message_bytes[..]).await;
     match ts {
@@ -35,11 +35,11 @@ pub struct KeepaliveMessage {
 }
 
 impl KeepaliveMessage {
-    pub fn new() -> Self {
-        let message_header = MessageHeader::new(MessageType::Keepalive, None);
-        KeepaliveMessage {
-            message_header
-        }
+    pub fn new() -> Result<Self, MessageError> {
+        let message_header = MessageHeader::new(MessageType::Keepalive, None)?;
+       Ok(KeepaliveMessage {
+           message_header
+       })
     }
 
     pub fn convert_to_bytes(&self) -> Vec<u8> {
