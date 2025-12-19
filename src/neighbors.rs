@@ -1,6 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
-
-
+use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use crate::sessions::*;
 use crate::finite_state_machine::*;
 use crate::timers::*;
@@ -8,7 +9,9 @@ use crate::messages::update::*;
 use crate::errors::*;
 use crate::errors::BGPError::Message;
 use crate::routes::RouteV4;
-
+use crate:: finite_state_machine::events::*;
+use crate:: finite_state_machine::session_attributes::*;
+use crate::process::BGPProcess;
 
 #[derive(Debug)]
 pub enum IPType {
@@ -28,11 +31,14 @@ pub struct Neighbor {
     //ip_type: IPType,
     pub ip: Ipv4Addr,
     pub as_num: AS,
-    pub hello_time_sec: u16,
-    pub hold_time_sec: u16,
-    pub hold_timer: Option<Timer>,
+    // moved these timers to FSM struct
+    //pub hello_time_sec: u16,
+    //pub hold_time_sec: u16,
+    //pub hold_timer: Timer,
+    pub negotiated_hold_time_sec: u16,
     pub routes_v4: Vec<RouteV4>,
     pub peer_type: PeerType,
+
 }
 
 impl Neighbor {
@@ -54,21 +60,14 @@ impl Neighbor {
             return Err(MessageError::HoldTimeLessThanThreeAndNotZero);
         }
 
-        let hold_timer = if hold_time_sec == 0 {
-            None
-        } else {
-            Some(Timer::new(hold_time_sec))
-        };
 
         Ok(Neighbor {
             fsm: FSM::default(),
             ip,
             as_num,
-            hello_time_sec,
-            hold_time_sec,
-            hold_timer,
+            negotiated_hold_time_sec: hold_time_sec,
             routes_v4: Vec::new(),
-            peer_type
+            peer_type,
         })
 
     }
@@ -152,6 +151,202 @@ impl Neighbor {
         }
 
 
+    }
+
+    pub fn handle_event(&mut self, event: Event, tcp_stream: TcpStream) {
+        // TODO move the tcp_stream into the neighbor probably in between bgp.run and neighbor.run
+        match self.fsm.state {
+            State::Idle => {
+                // no connections being attempted or accepted
+                match event {
+                    Event::ManualStart => {
+                        self.fsm.connect_retry_counter = 0;
+                        self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
+                        self.fsm.state = State::Connect;
+                        // TODO start TCP listener or initial TCP connection here or return result to do it
+
+                    },
+                    Event::AutomaticStart => {
+                        self.fsm.connect_retry_counter = 0;
+                        self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
+                        self.fsm.state = State::Connect;
+                        // TODO start TCP listener or initial TCP connection here or return result to do it
+
+                    },
+                    Event::ManualStartWithPassiveTcpEstablishment => {
+                        self.fsm.connect_retry_counter = 0;
+                        self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
+                        self.fsm.state = State::Active;
+                        // TODO start TCP listener or return result to do it
+
+                    },
+                    Event::AutomaticStartWithPassiveTcpEstablishment => {
+                        self.fsm.connect_retry_counter = 0;
+                        self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
+                        self.fsm.state = State::Active;
+                        // TODO start TCP listener or return result to do it
+                    },
+                    // ManualStop and AutomaticStop are ignored in Idle
+                    // these next 3 events are for preventing peer oscillations
+                    Event::AutomaticStartWithDampPeerOscillations => {
+                        //TODO handle
+                    },
+                    Event::AutomaticStartWithDampPeerOscillationsAndPassiveTcpEstablishment => {
+                        //TODO handle
+                    },
+                    Event::IdleHoldTimerExpires => {
+                        //TODO handle
+                    },
+                }
+            },
+            State::Connect => {
+                // initiates and/or waits for the TCP connection to complete
+                match event {
+                    Event::ManualStop => {
+                        self.fsm.connect_retry_counter = 0;
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO drop TCP connection, just let it go out of scope
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::ConnectRetryTimerExpires => {
+                        // TODO drop TCP connection, just let it go out of scope
+                        self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
+                        self.fsm.delay_open_timer.stop();
+                        // TODO continue to listen for connection or try to connect to peer, and stay in Connect
+                    },
+                    Event::DelayOpenTimerExpires => {
+                        // TODO send open
+
+                        if self.fsm.idle_hold_time + 30 < 65505 {
+                            self.fsm.idle_hold_time += 30;
+                        }
+                        self.fsm.idle_hold_timer.start(self.fsm.idle_hold_time);
+
+                        // TODO continue to listen for connection and stay in Connect
+
+                            self.fsm.state = State::OpenSent;
+                    },
+                    Event::TcpConnectionValid => {
+                        // TODO
+                    },
+                    Event::TcpCRInvalid => {
+                        // TODO
+                    },
+                    Event::TcpCRAcked | Event::TcpConnectionConfirmed => {
+
+                        if self.fsm.delay_open {
+                            self.fsm.connect_retry_timer.stop();
+                            self.fsm.delay_open_timer.start(self.fsm.delay_open_time);
+                        }
+                        else {
+                            self.fsm.connect_retry_timer.stop();
+                            // TODO complete bgp init
+                            // TODO send open
+                            // set the HoldTimer to a large value (why after?)
+                            self.fsm.state = State::OpenSent;
+                        }
+
+                    },
+                    Event::TcpConnectionFails => {
+
+                        if self.fsm.delay_open_timer.is_running()? {
+                            self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
+                            self.fsm.delay_open_timer.stop();
+                            // TODO continue to listen for TCP conns
+                            self.fsm.state = State::Active;
+                        }
+                        else {
+                            self.fsm.connect_retry_timer.stop();
+                            // TODO drop TCP conn
+                            self.fsm.state = State::Idle;
+                        }
+
+                    },
+                    Event::BGPOpenWithDelayOpenTimerRunning => {
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO complete BGP init?
+                        self.fsm.delay_open_timer.stop();
+                        // TODO send open and keepalive
+                        if self.fsm.hold_time != 0 {
+                            self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
+                            self.fsm.hold_timer.start(self.negotiated_hold_time_sec);
+                        }
+                        else {
+                            self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
+                            self.fsm.hold_timer.stop();
+                        }
+                        self.fsm.state = State::OpenConfirm;
+                    },
+                    Event::BGPHeaderErr | Event::BGPOpenMsgErr => {
+                        if self.fsm.send_notification_without_open {
+                            // TODO send notification
+                        }
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO dampen peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::NotifMsgVerErr => {
+                        if self.fsm.delay_open_timer.is_running()? {
+                            self.fsm.connect_retry_timer.stop();
+                            // TODO drop tcp conn
+                        }
+                        else {
+                            self.fsm.connect_retry_timer.stop();
+                            self.fsm.connect_retry_counter += 1;
+                            if self.fsm.damp_peer_oscillations {
+                                // TODO dampen peer
+                            }
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::AutomaticStop | Event::HoldTimerExpires | Event::KeepaliveTimerExpires |
+                        Event::IdleHoldTimerExpires | Event::BGPOpen => {
+
+                        if self.fsm.connect_retry_timer.is_running()? {
+                            self.fsm.connect_retry_timer.stop();
+                        }
+                        if self.fsm.delay_open_timer.is_running()? {
+                            self.fsm.delay_open_timer.stop();
+                        }
+                        // TODO drop tcp conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO dampen peer
+                        }
+                        self.fsm.state = State::Idle;
+
+                    }
+
+
+                }
+            },
+            State::Active => {
+                // listening or trying for new TCP connections
+                match event {
+
+                }
+            },
+            State::OpenSent => {
+                match event {
+
+                }
+            },
+            State::OpenConfirm => {
+                match event {
+
+                }
+            },
+            State::Established => {
+                match event {
+
+                }
+            },
+
+        }
     }
 
 }

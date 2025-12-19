@@ -15,6 +15,11 @@ pub enum NeighborError {
 }
 
 #[derive(PartialEq, Debug)]
+pub enum TimerError {
+    TimerNotStarted
+}
+
+#[derive(PartialEq, Debug)]
 pub enum MessageError {
     NoMarkerFound,
     NoLenFound,
@@ -49,6 +54,7 @@ pub enum BGPError {
     Neighbor(NeighborError),
     Message(MessageError),
     Process(ProcessError),
+    Timer(TimerError),
 }
 
 impl From<ProcessError> for BGPError {
@@ -66,6 +72,9 @@ impl From<MessageError> for BGPError {
     }
 }
 
+impl From<TimerError> for BGPError {
+    fn from(e: TimerError) -> BGPError { BGPError::Timer(e) }
+}
 
 // impl From<MessageError> for NeighborError {
 //     fn from(e: MessageError) -> NeighborError {NeighborError::Message(e)}

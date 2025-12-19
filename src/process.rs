@@ -15,6 +15,7 @@ use crate::config::*;
 use crate::errors::{NeighborError};
 use crate::messages::open::get_neighbor_ipv4_address_from_stream;
 use crate::utils::*;
+use crate::finite_state_machine::*;
 
 async fn start_tcp(address: String, port: String) -> TcpListener {
     let listener = TcpListener::bind(address + ":" + &port).await;
@@ -83,15 +84,16 @@ impl BGPProcess {
         }
     }
 
-    pub fn validate_neighbor_ip(&mut self, peer_ip: IpAddr) -> Result<(), NeighborError> {
+    pub fn validate_neighbor_ip_is_configured(&mut self, peer_ip: IpAddr) -> Result<(), NeighborError> {
         // we don't have enough info to add the neighbor yet, so we just validate the IP for now
 
         if self.configured_neighbors.is_empty() {
             return Err(NeighborError::ConfiguredNeighborsEmpty)
         }
         for cn in &self.configured_neighbors {
-            println!("Found configured neighbor");
+            println!("Validated neighbor IP is in configured neighbors");
             let ip = get_neighbor_ipv4_address(peer_ip)?;
+            // TODO refactor string comparison out as it's inefficient
             if ip.to_string() == cn.ip {
                 return Ok(())
             }
@@ -115,33 +117,30 @@ impl BGPProcess {
         let listener = start_tcp(address, port).await;
         loop {
             match listener.accept().await {
-                Ok((mut ts, sa)) => {
+                Ok((mut tcp_stream, sa)) => {
                     let bgp_proc = Arc::clone(&bgp_proc);
                     println!("TCP connection established from {}", sa.ip().to_string());
-                    let peer_ip = ts.peer_addr().unwrap().ip();
+                    let peer_ip = tcp_stream.peer_addr().unwrap().ip();
                     {
                         let mut bgp = bgp_proc.lock().await;
-                        if let Err(e) = bgp.validate_neighbor_ip(peer_ip) {
+                        if let Err(e) = bgp.validate_neighbor_ip_is_configured(peer_ip) {
                             println!("Error validating neighbor IP: {:#?}", e);
                         }
-                        println!("Validated neighbor IP");
                     }
-
-
-                    //check if I've sent all active neighbors updates
-
+                    //let fsm = FSM::default();
+                    //FSM::run(fsm, bgp_proc, tcp_stream)
                     tokio::spawn(async move {
                         // max bgp msg size should never exceed 4096
                         // TODO determine if we want to honor the above rule or not, if not, how should we handle it
                         let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
                         loop {
-                            ts.readable().await.unwrap();
+                            tcp_stream.readable().await.unwrap();
                             //read tcp stream into buf and save size read
-                            let ip = match get_neighbor_ipv4_address_from_stream(&ts) {
+                            let ip = match get_neighbor_ipv4_address_from_stream(&tcp_stream) {
                                 Ok(i) => i,
                                 Err(_) => {continue}
                             };
-                            match ts.try_read_buf(&mut tsbuf) {
+                            match tcp_stream.try_read_buf(&mut tsbuf) {
                                 Ok(0) => {
                                     {
                                         let mut bgp = bgp_proc.lock().await;
@@ -169,7 +168,7 @@ impl BGPProcess {
                                             for m in &messages {
                                                 {
                                                     let mut bgp = bgp_proc.lock().await;
-                                                    match route_incomming_message_to_handler(&mut ts, m, &mut *bgp).await {
+                                                    match route_incomming_message_to_handler(&mut tcp_stream, m, &mut *bgp).await {
                                                         Ok(_) => {},
                                                         Err(e) => {
                                                             println!("Error handling message: {:#?}", e);
@@ -182,7 +181,6 @@ impl BGPProcess {
                                             println!("Error extracting messages: {:#?}", e);
                                         }
                                     }
-
                                 },
                                 Err(e) => {
                                     if e.kind() == io::ErrorKind::WouldBlock {
