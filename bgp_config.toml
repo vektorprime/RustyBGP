@@ -1,0 +1,15 @@
+[process_config]
+my_as = 2
+router_id = "1.1.1.1"
+
+[[net_advertisements_config]]
+prefix = "1.1.1.1/32"
+
+[[net_advertisements_config]]
+prefix = "10.0.0.0/24"
+
+[[neighbors_config]]
+ip = "10.0.0.23"
+as_num = 1
+hello_time = 60
+hold_time = 180
