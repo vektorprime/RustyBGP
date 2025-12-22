@@ -5,7 +5,7 @@ use crate::errors::TimerError;
 #[derive(Debug)]
 pub struct Timer {
     current_time: Option<Instant>,
-    max_time: Duration,
+    pub max_time: Duration,
 }
 
 impl Timer {
@@ -15,6 +15,11 @@ impl Timer {
             max_time: Duration::from_secs(max_time_sec as u64),
         }
     }
+
+    pub fn set_max_time(&mut self, max_time_sec: u16) {
+        self.max_time = Duration::from_secs(max_time_sec as u64);
+    }
+
     pub fn is_elapsed(&self) -> Result<bool, TimerError> {
         if let Some(ct) = self.current_time {
             if ct.elapsed() >= self.max_time {
