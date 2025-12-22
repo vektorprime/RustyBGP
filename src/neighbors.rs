@@ -783,7 +783,6 @@ impl Neighbor {
                         }
                         self.fsm.state = State::Idle;
                     },
-                    // 9, 12-13, 20-22
                    Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
                         Event::BGPOpenWithDelayOpenTimerRunning | Event::BGPHeaderErr | Event::BGPOpenMsgErr => {
 
