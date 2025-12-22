@@ -569,11 +569,235 @@ impl Neighbor {
             },
             State::OpenConfirm => {
                 match event {
+                    Event::ManualStop => {
+                        // TODO send notification with Cease
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter = 0;
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::AutomaticStop => {
+                        // TODO send notification with Cease
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::HoldTimerExpires => {
+                        // TODO send notification with Hold Timer Expired
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::KeepaliveTimerExpires => {
+                        // TODO send Keepalive
+                        self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
+                        // stay in OpenConfirm
+                    },
+                    Event::TcpConnectionValid | Event::TcpCRAcked | Event::TcpConnectionConfirmed => {
+                        // TODO
+                    },
+                    Event::TcpCRInvalid => {
+                        // ignore second connection attempt
+                    },
+                    Event::TcpConnectionFails | Event::NotifMsg => {
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::NotifMsgVerErr => {
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::BGPOpen => {
+                        // TODO look into this step more
+                        // TODO check for collision, if true break down conn
+                        // TODO send notification with Cease
+                        // IF COLLISION TRUE
+                        // invoke OpenCOllisionDump event? Need to make sure it's for right conn
+
+                        // IF COLLISION FALSE
+                        // PROCESS OPEN
+                    },
+                    Event::BGPHeaderErr | Event::BGPOpenMsgErr => {
+                        // TODO send Notification with error code
+                        self.fsm.connect_retry_timer.stop();
+                        // release resources
+                        // drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+
+                    },
+                    Event::OpenCollisionDump => {
+                        // TODO send notification with Cease
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO release BGP res.
+                        // TODO drop TCP conn (send fin)
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::KeepAliveMsg => {
+                        self.fsm.hold_timer.start(self.fsm.hold_time);
+                        self.fsm.state = State::Established;
+                    },
+                    Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
+                    Event::BGPOpenWithDelayOpenTimerRunning | Event::UpdateMsg | Event::UpdateMsgErr => {
+                        // TODO send Notification with code of FSM error
+                        self.fsm.connect_retry_timer.stop();
+                        // release resources
+                        // drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    }
 
                 }
             },
             State::Established => {
                 match event {
+                    Event::ManualStop => {
+                        // TODO send notification with Cease
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO delete all routes for this conn.
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter = 0;
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::AutomaticStop => {
+                        // TODO send notification with Cease
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO delete all routes for this conn.
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::HoldTimerExpires => {
+                        // TODO send notification with error code hold timer expired
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::KeepaliveTimerExpires => {
+                        // TODO send Keepalive
+                        if self.negotiated_hold_time_sec > 0 {
+                            self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
+                        }
+
+
+                    },
+                    // TODO restart keepalive timer everytime a keepalive or update msg is sent
+
+                    Event::TcpConnectionValid => {
+                        // TODO track the second conn
+                    },
+                    Event::TcpCRInvalid => {
+                        // ignore
+                    },
+                    Event::TcpConnectionConfirmed | Event::TcpCRAcked => {
+                        // TODO track the second conn until an open is sent
+                    },
+                    Event::BGPOpen => {
+                        if self.fsm.collision_detect_established_state {
+                            // check for collision
+                            // IF COLLISION
+                            // invoke OpenCollisionDump event
+                        }
+                    },
+                    Event::OpenCollisionDump => {
+                        // TODO send Notification with cease
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO delete all routes for this conn.
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::TcpConnectionFails | Event::NotifMsgVerErr | Event::NotifMsg => {
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO delete all routes for this conn.
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        self.fsm.state = State::Idle;
+                    },
+                    Event::KeepAliveMsg => {
+                        if self.negotiated_hold_time_sec > 0 {
+                            self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
+                        }
+                        // stay in Established
+                    },
+                    Event::UpdateMsg => {
+                        // TODO process Update
+                        if self.negotiated_hold_time_sec > 0 {
+                            self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
+                        }
+                        // stay in Established
+                    },
+                    Event::UpdateMsgErr => {
+                        // TODO send Notification with an update error
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO delete all routes for this conn.
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                            // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    },
+                    // 9, 12-13, 20-22
+                   Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
+                        Event::BGPOpenWithDelayOpenTimerRunning | Event::BGPHeaderErr | Event::BGPOpenMsgErr => {
+
+                        // TODO send Notification with an update error
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO delete all routes for this conn.
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        if self.fsm.damp_peer_oscillations {
+                        // TODO damp peer
+                        }
+                        self.fsm.state = State::Idle;
+                    }
 
                 }
             },
