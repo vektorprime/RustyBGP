@@ -4,6 +4,7 @@ use tokio::net::{TcpStream, TcpListener};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use std::path::Path;
 use crate::errors::*;
+use crate::finite_state_machine::State;
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
@@ -122,24 +123,42 @@ pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bg
         return Err(NeighborError::NeighborAlreadyEstablished.into())
     }
 
-    for cn in &bgp_proc.configured_neighbors {
-        // neighbor IP is already checked in previous funcs so it has to be in the list
-        if peer_ip.to_string() == cn.ip {
-            // TODO handle opt params
-            //let hold_time_sec = bgp_proc.established_neighbors.get(&peer_ip).unwrap().hold_time_sec;
-            let hold_time_sec = bgp_proc.get_neighbor_config(peer_ip)?.hold_time;
-            let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, hold_time_sec, bgp_proc.identifier, 0, None)?;
-            send_open(tcp_stream, open_message).await?;
-            send_keepalive(tcp_stream).await?;
-            add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
 
-            // TODO REMOVE AFTER TESTING IT WORKS HERE
-            test_net_advertisements(bgp_proc, tcp_stream).await?;
+    let neighbor = bgp_proc.neighbors.get_mut(&peer_ip).ok_or_else(|| NeighborError::PeerIPNotRecognized)?;
+    let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, neighbor.fsm.hold_time, bgp_proc.identifier, 0, None)?;
+    send_open(tcp_stream, open_message).await?;
+    send_keepalive(tcp_stream).await?;
+    //TODO handle this error so it doesn't return
+    neighbor.set_hold_time(received_open.hold_time)?;
+    neighbor.fsm.state = State::Established;
 
-            return Ok(())
-        }
-    }
-    return Err(NeighborError::PeerIPNotRecognized.into())
+    //add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
+
+    // TODO REMOVE AFTER TESTING IT WORKS HERE
+    test_net_advertisements(bgp_proc, tcp_stream).await?;
+
+    Ok(())
+
+
+
+    // for cn in &bgp_proc.configured_neighbors {
+    //     // neighbor IP is already checked in previous funcs so it has to be in the list
+    //     if peer_ip.to_string() == cn.ip {
+    //         // TODO handle opt params
+    //         //let hold_time_sec = bgp_proc.established_neighbors.get(&peer_ip).unwrap().hold_time_sec;
+    //         let hold_time_sec = bgp_proc.get_neighbor_config(peer_ip)?.hold_time;
+    //         let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, hold_time_sec, bgp_proc.identifier, 0, None)?;
+    //         send_open(tcp_stream, open_message).await?;
+    //         send_keepalive(tcp_stream).await?;
+    //         add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
+    //
+    //         // TODO REMOVE AFTER TESTING IT WORKS HERE
+    //         test_net_advertisements(bgp_proc, tcp_stream).await?;
+    //
+    //         return Ok(())
+    //     }
+    // }
+    // return Err(NeighborError::PeerIPNotRecognized.into())
 }
 
     // Ok(())
