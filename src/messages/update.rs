@@ -16,7 +16,7 @@ use crate::utils::{extract_u16_from_bytes, extract_u32_from_bytes, extract_u8_fr
 pub fn validate_neighbor_is_established(ts: &TcpStream, bgp_proc: &BGPProcess) -> Result<Ipv4Addr, NeighborError> {
     match ts.peer_addr().unwrap().ip() {
         IpAddr::V4(ip) => {
-            bgp_proc.established_neighbors.get(&ip).ok_or_else(|| NeighborError::PeerIPNotEstablished)?;
+            bgp_proc.neighbors.get(&ip).ok_or_else(|| NeighborError::PeerIPNotEstablished)?;
             println!("Validated neighbor is established");
             return Ok(ip);
 
@@ -33,7 +33,7 @@ pub async fn handle_update_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, 
     println!("Handling update message");
     let ip = validate_neighbor_is_established(tcp_stream, bgp_proc)?;
     let update_message = extract_update_message(tsbuf)?;
-    let neighbor = bgp_proc.established_neighbors.get_mut(&ip).unwrap();
+    let neighbor = bgp_proc.neighbors.get_mut(&ip).unwrap();
     neighbor.process_routes_from_message(update_message)?;
 
     Ok(())

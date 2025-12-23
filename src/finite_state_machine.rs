@@ -16,7 +16,7 @@ use events::*;
 pub mod events;
 pub mod session_attributes;
 
-#[derive(Default, Debug)]
+#[derive(PartialEq, Default, Debug)]
 pub enum State {
     #[default] Idle,
     Connect,

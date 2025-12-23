@@ -62,9 +62,9 @@ pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut O
     };
 
     let neighbor = Neighbor::new(peer_ip, AS::AS2(open_message.as_number), hello_time, hold_time, peer_type)?;
-    let index = bgp_proc.established_neighbors.len();
+    let index = bgp_proc.neighbors.len();
     //bgp_proc.active_neighbors.push(neighbor);
-    bgp_proc.established_neighbors.insert(peer_ip, neighbor);
+    bgp_proc.neighbors.insert(peer_ip, neighbor);
     Ok(index)
 }
 
