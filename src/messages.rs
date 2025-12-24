@@ -6,8 +6,8 @@ pub mod keepalive;
 pub mod open;
 pub mod header;
 pub mod update;
-mod route_refresh;
-mod notification;
+pub(crate) mod route_refresh;
+pub(crate) mod notification;
 
 use keepalive::*;
 use open::*;
@@ -16,6 +16,7 @@ use notification::*;
 use update::*;
 use crate::errors::{BGPError, MessageError};
 use crate::messages::route_refresh::handle_route_refresh_message;
+use crate::neighbors::Neighbor;
 use crate::process::BGPProcess;
 // pub enum Message {
 //     Open,
@@ -196,30 +197,7 @@ pub fn extract_messages_from_rec_data(tsbuf: &[u8]) -> Result<Vec<Vec<u8>>, Mess
     Ok(messages)
 }
 
-pub async fn route_incomming_message_to_handler(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
-    let message_type = parse_packet_type(&tsbuf)?;
-    println!("{}", message_type);
-    match message_type {
-        MessageType::Open => {
-            handle_open_message(tcp_stream, tsbuf, bgp_proc).await?
-        },
-        MessageType::Update => {
-            handle_update_message(tcp_stream, tsbuf, bgp_proc).await?
-        },
-        MessageType::Notification => {
-            handle_notification_message(tcp_stream, tsbuf, bgp_proc).await?;
-        },
-        MessageType::Keepalive => {
-            handle_keepalive_message(tcp_stream).await?
-        },
-        MessageType::RouteRefresh => {
-            // TODO handle route refresh
-            handle_route_refresh_message(tcp_stream, tsbuf)?
-        }
 
-    }
-    Ok(())
-}
 
 
 #[cfg(test)]

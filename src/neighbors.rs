@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -12,9 +13,10 @@ use crate::errors::BGPError::Message;
 use crate::routes::RouteV4;
 use crate:: finite_state_machine::events::*;
 use crate:: finite_state_machine::session_attributes::*;
-use crate::messages::{extract_messages_from_rec_data, route_incomming_message_to_handler};
-use crate::messages::open::get_neighbor_ipv4_address_from_stream;
-use crate::process::BGPProcess;
+use crate::messages::{extract_messages_from_rec_data, parse_packet_type, BGPVersion, MessageType};
+use crate::messages::keepalive::{handle_keepalive_message, send_keepalive};
+use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, test_net_advertisements, OpenMessage};
+use crate::process::{BGPProcess, GlobalSettings};
 
 #[derive(Debug)]
 pub enum IPType {
@@ -42,8 +44,8 @@ pub struct Neighbor {
     pub negotiated_hold_time_sec: u16,
     pub routes_v4: Vec<RouteV4>,
     pub peer_type: PeerType,
-    ip_type: IPType,
-
+    pub ip_type: IPType,
+    pub global_settings: GlobalSettings
 }
 
 impl Neighbor {
@@ -64,7 +66,7 @@ impl Neighbor {
         Ok(())
     }
 
-    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType) -> Result<Neighbor, MessageError> {
+    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: &GlobalSettings) -> Result<Neighbor, MessageError> {
         //pub fn new(ip: IpAddr, hold_time_sec: u16, keepalive_time_sec: u16) -> Result<Neighbor, NeighborError> {
         // if keepalive_time_sec > hold_time_sec {
         //     return Err(NeighborError::KeepaliveGreaterThanHoldTime)
@@ -89,7 +91,9 @@ impl Neighbor {
             negotiated_hold_time_sec: hold_time_sec,
             routes_v4: Vec::new(),
             peer_type,
-            ip_type: IPType::V4
+            ip_type: IPType::V4,
+            global_settings: settings.clone(), // we don't store a reference here because it gets too complicated
+            // we'll update all neighbor from the BGP proc settings when anything changes.
         })
 
     }
@@ -893,85 +897,160 @@ impl Neighbor {
             },
         }
     }
-    pub async fn run(&mut self, mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>) {
+
+
+
+    pub async fn handle_open_message(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+        // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
+        // compare the open message params to configured neighbor
+        let mut received_open = extract_open_message(tsbuf)?;
+
+        let peer_ip = get_neighbor_ipv4_address_from_stream(tcp_stream)?;
+
+        if self.is_established() {
+            return Err(NeighborError::NeighborAlreadyEstablished.into())
+        }
+
+
+        //let neighbor = bgp_proc.neighbors.get_mut(&peer_ip).ok_or_else(|| NeighborError::PeerIPNotRecognized)?;
+        let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.global_settings.my_as, self.fsm.hold_time, bgp_proc.global_settings.identifier, 0, None)?;
+        send_open(tcp_stream, open_message).await?;
+        send_keepalive(tcp_stream).await?;
+        //TODO handle this error so it doesn't return
+        self.set_hold_time(received_open.hold_time)?;
+        self.fsm.state = State::Established;
+
+        //add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
+
+        // TODO REMOVE AFTER TESTING IT WORKS HERE
+        test_net_advertisements(bgp_proc, tcp_stream).await?;
+
+        Ok(())
+
+    }
+
+    pub async fn handle_update_message(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+        println!("Handling update message");
+        if !self.is_established() {
+            return Err(NeighborError::PeerIPNotEstablished.into())
+        }
+        let update_message = extract_update_message(tsbuf)?;
+        self.process_routes_from_message(update_message)?;
+
+        Ok(())
+    }
+
+
+    pub async fn route_incoming_message_to_handler(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+        let message_type = parse_packet_type(&tsbuf)?;
+        println!("{}", message_type);
+        match message_type {
+            MessageType::Open => {
+                self.handle_open_message(tcp_stream, tsbuf, bgp_proc).await?
+            },
+            MessageType::Update => {
+                self.handle_update_message(tcp_stream, tsbuf, bgp_proc).await?
+            },
+            MessageType::Notification => {
+                crate::messages::notification::handle_notification_message(tcp_stream, tsbuf, bgp_proc).await?;
+            },
+            MessageType::Keepalive => {
+                handle_keepalive_message(tcp_stream).await?
+            },
+            MessageType::RouteRefresh => {
+                // TODO handle route refresh
+                crate::messages::route_refresh::handle_route_refresh_message(tcp_stream, tsbuf)?
+            }
+
+        }
+        Ok(())
+    }
+
+    pub fn is_established(&self) -> bool {
+        if self.fsm.state == State::Established { true }
+        else { false }
+    }
+
+
+}
+
+
+
+pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, all_neighbors: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
-        tokio::spawn(async move {
-        // max bgp msg size should never exceed 4096
-        // TODO determine if we want to honor the above rule or not, if not, how should we handle it
-        let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
-        //let tcp_stream = ts;
-        loop {
-            tcp_stream.readable().await.unwrap();
-            //read tcp stream into buf and save size read
-            let ip = match get_neighbor_ipv4_address_from_stream(&tcp_stream) {
-                Ok(i) => i,
-                Err(_) => {continue}
-            };
-            match tcp_stream.try_read_buf(&mut tsbuf) {
-                Ok(0) => {
-                    {
-                        let mut bgp = bgp_proc.lock().await;
-                        if bgp.is_neighbor_established(ip) {
-                            if let Err(e) = bgp.remove_established_neighbor(ip) {
-                                println!("ERROR: {:#?}", e);
-                            }
+
+    // max bgp msg size should never exceed 4096
+    // TODO determine if we want to honor the above rule or not, if not, how should we handle it
+    let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
+    //let tcp_stream = ts;
+    loop {
+        tcp_stream.readable().await.unwrap();
+        //read tcp stream into buf and save size read
+        let ip = match get_neighbor_ipv4_address_from_stream(&tcp_stream) {
+            Ok(i) => i,
+            Err(_) => {continue}
+        };
+        match tcp_stream.try_read_buf(&mut tsbuf) {
+            Ok(0) => {
+                {
+                    let mut all_neighbors = all_neighbors.lock().await;
+                    if let Some(n) = all_neighbors.get_mut(&peer_ip) {
+                        if n.is_established() {
+                            // TODO generate event about neighbor going from established to idle or active
                         }
-                    }
-                },
-                Ok(size) => {
-                    println!("Read {} bytes from the stream. ", size);
-                    let hex = tsbuf[..size]
-                        .iter()
-                        .map(|b| format!("{:02X} ", b))
-                        .collect::<String>();
-                    println!("Data read from the stream: {}", hex);
-                    // min valid bgp msg len is 19 bytes
-                    if tsbuf.len() < 19 {
-                        println!("Data in stream too low to be a valid message, skipping: {}", hex);
-                        continue;
-                    }
-                    match extract_messages_from_rec_data(&tsbuf[..size]) {
-                        Ok(messages) => {
-                            for m in &messages {
-                                {
-                                    let mut bgp = bgp_proc.lock().await;
-                                    match route_incomming_message_to_handler(&mut tcp_stream, m, &mut *bgp).await {
-                                        Ok(_) => {},
-                                        Err(e) => {
-                                            println!("Error handling message: {:#?}", e);
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            println!("Error extracting messages: {:#?}", e);
-                        }
-                    }
-                },
-                Err(e) => {
-                    if e.kind() == io::ErrorKind::WouldBlock {
-                        continue;
-                    } else {
-                        println!("Error : {:#?}", e);
-                        {
-                            let mut bgp = bgp_proc.lock().await;
-                            if bgp.is_neighbor_established(ip) {
-                                if let Err(e) = bgp.remove_established_neighbor(ip) {
-                                    println!("ERROR: {:#?}", e);
-                                }
-                            }
-                        }
-                        break;
-                        //return Err(e.into());
                     }
                 }
-                //let size = ts.read(&mut tsbuf[..]).unwrap();
-                //println!("Data read from the stream: {:#x?}", &tsbuf.get(..size).unwrap());
+            },
+            Ok(size) => {
+                println!("Read {} bytes from the stream. ", size);
+                let hex = tsbuf[..size]
+                    .iter()
+                    .map(|b| format!("{:02X} ", b))
+                    .collect::<String>();
+                println!("Data read from the stream: {}", hex);
+                // min valid bgp msg len is 19 bytes
+                if tsbuf.len() < 19 {
+                    println!("Data in stream too low to be a valid message, skipping: {}", hex);
+                    continue;
+                }
+                match extract_messages_from_rec_data(&tsbuf[..size]) {
+                    Ok(messages) => {
+                        for m in &messages {
+                            {
+                                let mut bgp = bgp_proc.lock().await;
+                                let mut all_neighbors = all_neighbors.lock().await;
+                                if let Some(n) = all_neighbors.get_mut(&peer_ip) {
+                                    if let Err(e) =  n.route_incoming_message_to_handler(&mut tcp_stream, m, &mut *bgp).await {
+                                        println!("Error handling message: {:#?}", e);
+                                    }
+                                }
+
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        println!("Error extracting messages: {:#?}", e);
+                    }
+                }
+            },
+            Err(e) => {
+                if e.kind() == io::ErrorKind::WouldBlock {
+                    continue;
+                }
+                else {
+                    println!("Error : Unable to use TCP Stream -  {:#?}", e);
+                    {
+                        //all_neighbors.lock().await;
+                        // TODO generate event of neighbor needs to be torn down
+                    }
+                    return Err(NeighborError::TCPConnDied.into());
+                    //return Err(e.into());
+                }
             }
-            tsbuf.clear();
+            //let size = ts.read(&mut tsbuf[..]).unwrap();
+            //println!("Data read from the stream: {:#x?}", &tsbuf.get(..size).unwrap());
         }
-        });
+        tsbuf.clear();
     }
 
 }

@@ -1,22 +1,19 @@
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::error::Error;
-use std::io;
+
 use std::str::FromStr;
 use std::collections::HashMap;
 use std::sync::Arc;
-
 use tokio::net::{TcpListener};
 use tokio::sync::Mutex;
 
-use crate::messages::*;
-use crate::neighbors::*;
+
 use crate::config::*;
-use crate::errors::{BGPError, NeighborError};
-use crate::messages::open::get_neighbor_ipv4_address_from_stream;
+use crate::errors::*;
 use crate::utils::*;
-use crate::finite_state_machine::*;
 use crate::messages::update::AS::AS4;
+use crate::neighbors;
+use crate::neighbors::{Neighbor, PeerType};
 
 async fn start_tcp(address: String, port: String) -> TcpListener {
     let listener = TcpListener::bind(address + ":" + &port).await;
@@ -31,25 +28,30 @@ async fn start_tcp(address: String, port: String) -> TcpListener {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct GlobalSettings {
+    pub my_as: u16,
+    pub identifier:Ipv4Addr
+}
+
 #[derive(Debug)]
 pub struct BGPProcess {
-    pub(crate) my_as: u16,
-    pub(crate) identifier: Ipv4Addr,
-    //pub active_neighbors: Vec<Neighbor>,
-    pub neighbors: HashMap<Ipv4Addr, Neighbor>,
+    pub global_settings: GlobalSettings,
+    //pub neighbors: HashMap<Ipv4Addr, Neighbor>,
     pub configured_neighbors: Vec<NeighborConfig>,
     pub configured_networks: Vec<NetAdvertisementsConfig>,
 }
 
-
 impl BGPProcess {
     pub fn new(config_file_name: String) -> Self {
         let config = read_config_file(config_file_name);
-        BGPProcess {
+        let global_settings = GlobalSettings {
             my_as: config.process_config.my_as,
-            identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap(),
-            //active_neighbors: Vec::new(),
-            neighbors: HashMap::new(),
+            identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap()
+        };
+        BGPProcess {
+            global_settings,
+            //neighbors: HashMap::new(),
             configured_neighbors: config.neighbors_config,
             configured_networks: config.net_advertisements_config,
         }
@@ -65,14 +67,17 @@ impl BGPProcess {
         Err(NeighborError::ConfiguredNeighborNotFound)
     }
 
-    pub fn is_neighbor_established(&self, peer_ip: Ipv4Addr) -> bool {
-        if let Some(n) =  self.neighbors.get(&peer_ip) {
-            if n.fsm.state == State::Established {
-                return true
-            }
-        }
-        false
-    }
+
+
+
+    // pub fn is_neighbor_established(&self, peer_ip: Ipv4Addr) -> bool {
+    //     if let Some(n) =  self.neighbors.get(&peer_ip) {
+    //         if n.fsm.state == State::Established {
+    //             return true
+    //         }
+    //     }
+    //     false
+    // }
 
 
     // pub fn is_neighbor_established(&self, peer_ip: Ipv4Addr) -> bool {
@@ -82,38 +87,32 @@ impl BGPProcess {
     //     false
     // }
 
-    pub fn remove_established_neighbor(&mut self, ip: Ipv4Addr) -> Result<(), NeighborError> {
-        match self.neighbors.remove(&ip) {
-            Some(_) => {
-                println!("Removed neighbor : {}", ip.to_string());
-                Ok(())
-            },
-            None => {
-                println!("ERROR: {:#?}", NeighborError::UnableToRemoveNeighbor);
-                Err(NeighborError::UnableToRemoveNeighbor)
-            }
-        }
-    }
+    // pub fn remove_established_neighbor(&mut self, ip: Ipv4Addr) -> Result<(), NeighborError> {
+    //     match self.neighbors.remove(&ip) {
+    //         Some(_) => {
+    //             println!("Removed neighbor : {}", ip.to_string());
+    //             Ok(())
+    //         },
+    //         None => {
+    //             println!("ERROR: {:#?}", NeighborError::UnableToRemoveNeighbor);
+    //             Err(NeighborError::UnableToRemoveNeighbor)
+    //         }
+    //     }
+    // }
 
-    pub fn validate_neighbor_ip_is_configured(&mut self, peer_ip: IpAddr) -> Result<(), NeighborError> {
-        if self.neighbors.is_empty() {
+    pub fn validate_neighbor_ip_is_configured(peer_ip: &Ipv4Addr, neighbors: &HashMap<Ipv4Addr, Neighbor>) -> Result<(), NeighborError> {
+        if neighbors.is_empty() {
             return Err(NeighborError::ConfiguredNeighborsEmpty)
         }
-        for n in &self.neighbors {
-            let ip = get_neighbor_ipv4_address(peer_ip)?;
-            // TODO refactor string comparison out as it's inefficient
-            if *n.0 == peer_ip {
-                println!("Validated neighbor IP is in configured neighbors");
-                return Ok(())
-            }
-            else {
-                return Err(NeighborError::PeerIPNotRecognized)
-            }
-
-
+        if let Some(n) = neighbors.get(&peer_ip) {
+            println!("Validated neighbor IP is in configured neighbors");
+            Ok(())
+        }
+        else {
+            Err(NeighborError::PeerIPNotRecognized)
         }
 
-        Err(NeighborError::ConfiguredNeighborsEmpty)
+
 
     }
 
@@ -145,79 +144,82 @@ impl BGPProcess {
     //     // maybe at some point I will react to TCP events, or I'll rely on errors from write or read
     // }
 
-    pub fn populate_neighbors_from_config(&mut self) {
-        for nc in &self.configured_neighbors {
-            match Ipv4Addr::from_str(&nc.ip) {
-                Ok(ip) => {
-                    let peer_type = if self.my_as == nc.as_num {
-                        PeerType::Internal
-                    } else {
-                        PeerType::External
-                    };
-                    match Neighbor::new(ip, AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type) {
-                        Ok(neighbor) => {
-                            self.neighbors.insert(ip, neighbor);
-                        },
-                        Err(e) => {
-                            println!("Unable to create neighbor (IP) {:#?} from Config, ERROR: {:#?}", ip, e);
-                        }
-                    }
-                },
-                Err(_) => {
-                    println!("ERROR: Unable to convert config string to IP, skipping");
-                    continue;
-                }
-            }
 
-
-        }
-    }
 
     pub async fn run(bgp_proc: Arc<Mutex<BGPProcess>>, address: String, port: String) {
         //let mut connection_buffers: Vec<Vec<u8>> = Vec::new();
-        {
-            let mut bgp = bgp_proc.lock().await;
-            bgp.populate_neighbors_from_config();
-        }
+        let mut all_neighbors = {
+            let bgp = bgp_proc.lock().await;
+            Arc::new(Mutex::new(BGPProcess::populate_neighbors_from_config(&bgp)))
+        };
+
+
         let listener = start_tcp(address, port).await;
         loop {
             match listener.accept().await {
                 Ok((mut tcp_stream, sa)) => {
-                    let bgp_arc = Arc::clone(&bgp_proc);
                     println!("TCP connection established from {}", sa.ip().to_string());
-                    let peer_ip = tcp_stream.peer_addr().unwrap().ip();
-                    {
-                        let mut bgp = bgp_arc.lock().await;
-                        if let Err(e) = bgp.validate_neighbor_ip_is_configured(peer_ip) {
-                            println!("Error validating neighbor IP: {:#?}, skipping", e);
+                    let peer_ip = match get_neighbor_ipv4_address_from_socket(tcp_stream.peer_addr()) {
+                        Ok(ip) => ip,
+                        Err(e) => {
+                            println!("Error: TCP Socket error -  {:#?}, skipping", e);
                             continue;
                         }
-                        let ip = get_neighbor_ipv4_address(peer_ip);
-                         match ip {
-                             Ok(ip) => {
-                                 let neighbor = bgp.neighbors.get_mut(&ip);
-                                 match neighbor {
-                                     Some(n) => {
-                                         let bgp_arc = Arc::clone(&bgp_proc);
-                                         //tokio::spawn(async move {
-                                             // get the neighbor and pass the tcp conn
-                                             n.run(tcp_stream, bgp_arc).await;
-                                         //});
-                                     },
-                                     None => {
-                                         println!("ERROR: Unable to get a handle to the neighbor in bgp.run()");
-                                     }
-                                 }
-                             },
-                             Err(e) => println!("{:#?}",e )
-                         }
+                    };
+                    {
+                        let all_n = all_neighbors.lock().await;
+                        if let Err(e) = BGPProcess::validate_neighbor_ip_is_configured(&peer_ip, &all_n) {
+                            println!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
+                            continue;
+                        }
+
                     }
 
-                    },
+
+                    let bgp_arc = Arc::clone(&bgp_proc);
+                    let all_neighbors_arc = Arc::clone(&all_neighbors);
+                    tokio::spawn(async move {
+                        // get the neighbor and pass the tcp conn
+                        if let Err(e) = neighbors::run(tcp_stream, bgp_arc, all_neighbors_arc, peer_ip).await {
+                            println!("Error: Unable to continue run() for neighbor {:#?} - {:#?}", peer_ip, e);
+                        }
+                    });
+
+                },
                 Err(e) => {
-                    println!("Error : {:#?}", e);
+                    println!("Error: TCP Stream {:#?}", e);
                 }
             }
         }
+    }
+
+    pub fn populate_neighbors_from_config(bgp_proc: &BGPProcess) -> HashMap<Ipv4Addr, Neighbor> {
+
+        let mut all_neighbors = HashMap::new();
+        for nc in &bgp_proc.configured_neighbors {
+            match Ipv4Addr::from_str(&nc.ip) {
+                Ok(ip) => {
+                    let peer_type = if bgp_proc.global_settings.my_as == nc.as_num {
+                        PeerType::Internal
+                    } else {
+                        PeerType::External
+                    };
+                    match Neighbor::new(ip, AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, &bgp_proc.global_settings) {
+                        Ok(neighbor) => {
+                            all_neighbors.insert(ip, neighbor);
+                        },
+                        Err(e) => {
+                            println!("Error: Unable to create neighbor (IP) {:#?} from Config, ERROR: {:#?}", ip, e);
+                        }
+                    }
+                },
+                Err(_) => {
+                    println!("Error: Unable to convert config string to IP, skipping");
+                    continue;
+                }
+            }
+        }
+
+        all_neighbors
     }
 }

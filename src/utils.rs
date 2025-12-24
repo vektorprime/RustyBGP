@@ -1,11 +1,12 @@
+use tokio::io;
 
 // pub fn convert_u16_to_u8(val: u16) -> [u8; 2] {
 //
 // }
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use tokio::net::TcpStream;
-use crate::errors::{MessageError, NeighborError};
+use crate::errors::{BGPError, MessageError, NeighborError};
 
 pub fn extract_u32_from_bytes(tsbuf: &Vec<u8>, start_index: usize, end_index: usize) -> Result<u32, MessageError> {
     match tsbuf.get(start_index..end_index) {
@@ -36,4 +37,20 @@ pub fn get_neighbor_ipv4_address(peer_ip: IpAddr) -> Result<Ipv4Addr, NeighborEr
     else {
          Err(NeighborError::NeighborIsIPV6.into())
     }
+}
+
+
+pub fn get_neighbor_ipv4_address_from_socket(peer_ip: io::Result<SocketAddr>) -> Result<Ipv4Addr, NeighborError> {
+    match peer_ip {
+        Ok(ip) => {
+            match ip.ip() {
+                IpAddr::V4(ip4) => Ok(ip4),
+                IpAddr::V6(ip6) => Err(NeighborError::NeighborIsIPV6)
+            }
+        },
+        Err(_) => {
+            Err(NeighborError::PeerIPNotRecognized)
+        }
+    }
+
 }

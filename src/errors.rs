@@ -10,13 +10,13 @@ pub enum NeighborError {
     PeerIPNotEstablished,
     NeighborAlreadyEstablished,
     UnableToRemoveNeighbor,
-    ConfiguredNeighborNotFound
-    //Message(MessageError)
+    ConfiguredNeighborNotFound,
+    TCPConnDied,
 }
 
 #[derive(PartialEq, Debug)]
 pub enum TimerError {
-    TimerNotStarted
+    TimerNotStarted,
 }
 
 #[derive(PartialEq, Debug)]

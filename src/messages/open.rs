@@ -43,31 +43,31 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
 }
 
 
-pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut OpenMessage, peer_ip: Ipv4Addr, hello_time: u16, my_hold_time: u16) -> Result<(usize), BGPError> {
-    // for an in &bgp_proc.active_neighbors {
-    //     if peer_ip.to_string() == an.ip {
-    //         return Err(NeighborError::NeighborAlreadyEstablished.into())
-    //     }
-    // }
-
-    let hold_time = if my_hold_time <= open_message.hold_time {
-        my_hold_time
-    } else {
-        open_message.hold_time
-    };
-
-    let peer_type = if bgp_proc.my_as == open_message.as_number {
-        PeerType::Internal
-    }  else {
-        PeerType::External
-    };
-
-    let neighbor = Neighbor::new(peer_ip, AS::AS2(open_message.as_number), hello_time, hold_time, peer_type)?;
-    let index = bgp_proc.neighbors.len();
-    //bgp_proc.active_neighbors.push(neighbor);
-    bgp_proc.neighbors.insert(peer_ip, neighbor);
-    Ok(index)
-}
+// pub fn add_neighbor_from_message(bgp_proc: &mut BGPProcess, open_message: &mut OpenMessage, peer_ip: Ipv4Addr, hello_time: u16, my_hold_time: u16) -> Result<(usize), BGPError> {
+//     // for an in &bgp_proc.active_neighbors {
+//     //     if peer_ip.to_string() == an.ip {
+//     //         return Err(NeighborError::NeighborAlreadyEstablished.into())
+//     //     }
+//     // }
+//
+//     let hold_time = if my_hold_time <= open_message.hold_time {
+//         my_hold_time
+//     } else {
+//         open_message.hold_time
+//     };
+//
+//     let peer_type = if bgp_proc.my_as == open_message.as_number {
+//         PeerType::Internal
+//     }  else {
+//         PeerType::External
+//     };
+//
+//     let neighbor = Neighbor::new(peer_ip, AS::AS2(open_message.as_number), hello_time, hold_time, peer_type)?;
+//     let index = bgp_proc.neighbors.len();
+//     //bgp_proc.active_neighbors.push(neighbor);
+//     bgp_proc.neighbors.insert(peer_ip, neighbor);
+//     Ok(index)
+// }
 
 
 pub fn get_neighbor_ipv4_address_from_stream(tcp_stream: &TcpStream) -> Result<Ipv4Addr, NeighborError> {
@@ -111,57 +111,6 @@ pub async fn test_net_advertisements(bgp_proc: &mut BGPProcess, tcp_stream: &mut
     
     Ok(())
 }
-
-pub async fn handle_open_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
-    // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
-    // compare the open message params to configured neighbor
-    let mut received_open = extract_open_message(tsbuf)?;
-
-    let peer_ip = get_neighbor_ipv4_address_from_stream(tcp_stream)?;
-
-    if bgp_proc.is_neighbor_established(peer_ip) {
-        return Err(NeighborError::NeighborAlreadyEstablished.into())
-    }
-
-
-    let neighbor = bgp_proc.neighbors.get_mut(&peer_ip).ok_or_else(|| NeighborError::PeerIPNotRecognized)?;
-    let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, neighbor.fsm.hold_time, bgp_proc.identifier, 0, None)?;
-    send_open(tcp_stream, open_message).await?;
-    send_keepalive(tcp_stream).await?;
-    //TODO handle this error so it doesn't return
-    neighbor.set_hold_time(received_open.hold_time)?;
-    neighbor.fsm.state = State::Established;
-
-    //add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
-
-    // TODO REMOVE AFTER TESTING IT WORKS HERE
-    test_net_advertisements(bgp_proc, tcp_stream).await?;
-
-    Ok(())
-
-
-
-    // for cn in &bgp_proc.configured_neighbors {
-    //     // neighbor IP is already checked in previous funcs so it has to be in the list
-    //     if peer_ip.to_string() == cn.ip {
-    //         // TODO handle opt params
-    //         //let hold_time_sec = bgp_proc.established_neighbors.get(&peer_ip).unwrap().hold_time_sec;
-    //         let hold_time_sec = bgp_proc.get_neighbor_config(peer_ip)?.hold_time;
-    //         let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.my_as, hold_time_sec, bgp_proc.identifier, 0, None)?;
-    //         send_open(tcp_stream, open_message).await?;
-    //         send_keepalive(tcp_stream).await?;
-    //         add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
-    //
-    //         // TODO REMOVE AFTER TESTING IT WORKS HERE
-    //         test_net_advertisements(bgp_proc, tcp_stream).await?;
-    //
-    //         return Ok(())
-    //     }
-    // }
-    // return Err(NeighborError::PeerIPNotRecognized.into())
-}
-
-    // Ok(())
 
 
 pub async fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(), MessageError> {

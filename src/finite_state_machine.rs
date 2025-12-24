@@ -5,7 +5,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use crate::errors::BGPError;
-use crate::messages::{extract_messages_from_rec_data, route_incomming_message_to_handler};
+use crate::messages::{extract_messages_from_rec_data};
 use crate::messages::open::get_neighbor_ipv4_address_from_stream;
 use crate::process::BGPProcess;
 use crate::timers::Timer;
