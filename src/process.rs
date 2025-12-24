@@ -156,6 +156,8 @@ impl BGPProcess {
 
         let listener = start_tcp(address, port).await;
         loop {
+            // TODO handle config sync between proc and neighbors, maybe use an event based thing or just cycle through the neighbors and update
+            // TODO generate events here for for overall process (also do it in neighbor run)
             match listener.accept().await {
                 Ok((mut tcp_stream, sa)) => {
                     println!("TCP connection established from {}", sa.ip().to_string());
@@ -172,7 +174,6 @@ impl BGPProcess {
                             println!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
                             continue;
                         }
-
                     }
 
 

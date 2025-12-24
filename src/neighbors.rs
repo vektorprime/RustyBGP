@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -11,8 +11,8 @@ use crate::messages::update::*;
 use crate::errors::*;
 use crate::errors::BGPError::Message;
 use crate::routes::RouteV4;
-use crate:: finite_state_machine::events::*;
-use crate:: finite_state_machine::session_attributes::*;
+use crate::finite_state_machine::events::Event;
+
 use crate::messages::{extract_messages_from_rec_data, parse_packet_type, BGPVersion, MessageType};
 use crate::messages::keepalive::{handle_keepalive_message, send_keepalive};
 use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, test_net_advertisements, OpenMessage};
@@ -45,7 +45,8 @@ pub struct Neighbor {
     pub routes_v4: Vec<RouteV4>,
     pub peer_type: PeerType,
     pub ip_type: IPType,
-    pub global_settings: GlobalSettings
+    pub global_settings: GlobalSettings,
+    pub events: VecDeque<Event>,
 }
 
 impl Neighbor {
@@ -94,6 +95,7 @@ impl Neighbor {
             ip_type: IPType::V4,
             global_settings: settings.clone(), // we don't store a reference here because it gets too complicated
             // we'll update all neighbor from the BGP proc settings when anything changes.
+            events: VecDeque::new(),
         })
 
     }
@@ -176,10 +178,9 @@ impl Neighbor {
             Err(MessageError::MissingNLRI)
         }
 
-
     }
 
-    pub fn handle_event(&mut self, event: Event, tcp_stream: TcpStream) -> Result<(), BGPError> {
+    pub fn handle_event(&mut self, event: Event, tcp_stream: &mut TcpStream) -> Result<(), BGPError> {
         // TODO move the tcp_stream into the neighbor probably in between bgp.run and neighbor.run
         match self.fsm.state {
             State::Idle => {
@@ -903,9 +904,9 @@ impl Neighbor {
     pub async fn handle_open_message(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
         // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
         // compare the open message params to configured neighbor
-        let mut received_open = extract_open_message(tsbuf)?;
+        let received_open = extract_open_message(tsbuf)?;
 
-        let peer_ip = get_neighbor_ipv4_address_from_stream(tcp_stream)?;
+        //let peer_ip = get_neighbor_ipv4_address_from_stream(tcp_stream)?;
 
         if self.is_established() {
             return Err(NeighborError::NeighborAlreadyEstablished.into())
@@ -971,10 +972,30 @@ impl Neighbor {
         else { false }
     }
 
+    pub fn check_timers_and_generate_events(&mut self) {
+        if let Ok(true) = self.fsm.connect_retry_timer.is_elapsed() {
+           self.events.push_back(Event::ConnectRetryTimerExpires);
+        }
+        if let Ok(true) = self.fsm.hold_timer.is_elapsed() {
+            self.events.push_back(Event::HoldTimerExpires);
+        }
+        if let Ok(true) = self.fsm.keepalive_timer.is_elapsed() {
+            self.events.push_back(Event::KeepaliveTimerExpires);
+        }
+        if let Ok(true) = self.fsm.delay_open_timer.is_elapsed() {
+            self.events.push_back(Event::DelayOpenTimerExpires);
+        }
+        if let Ok(true) = self.fsm.idle_hold_timer.is_elapsed() {
+            self.events.push_back(Event::IdleHoldTimerExpires);
+        }
+    }
 
 }
 
 
+pub async fn unlock_arc() {
+
+}
 
 pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, all_neighbors: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
@@ -984,6 +1005,18 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
     let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
     //let tcp_stream = ts;
     loop {
+        //TODO check all timers and generate events as needed here
+        {
+            let mut all_neighbors = all_neighbors.lock().await;
+            if let Some(n) = all_neighbors.get_mut(&peer_ip) {
+                n.check_timers_and_generate_events();
+                while let Some(e) = n.events.pop_back() {
+                    if let Err(e) = n.handle_event(e, &mut tcp_stream) {
+                        println!("Error: Unable to handle event {:#?}", e);
+                    }
+                }
+            }
+        }
         tcp_stream.readable().await.unwrap();
         //read tcp stream into buf and save size read
         let ip = match get_neighbor_ipv4_address_from_stream(&tcp_stream) {

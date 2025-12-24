@@ -29,7 +29,7 @@
 
 
 
-
+#[derive(Debug)]
 pub enum Event {
     // Administrative events
     ManualStart,
