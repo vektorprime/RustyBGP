@@ -52,5 +52,4 @@ pub fn get_neighbor_ipv4_address_from_socket(peer_ip: io::Result<SocketAddr>) ->
             Err(NeighborError::PeerIPNotRecognized)
         }
     }
-
 }

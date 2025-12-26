@@ -1,7 +1,7 @@
 
 use crate::messages::*;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct MessageHeader {
     pub marker: [u8; 16], // always all bits set
     pub length: u16, // min 19 max 4096

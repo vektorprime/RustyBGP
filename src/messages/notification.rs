@@ -6,7 +6,7 @@ use crate::messages::header::MessageHeader;
 use crate::messages::keepalive::send_keepalive;
 use crate::process::BGPProcess;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct NotificationMessage {
     // min length 29 bytes
     pub message_header: MessageHeader,

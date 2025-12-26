@@ -26,10 +26,13 @@
 //     CollisionDetectEstablishedState(bool),
 // }
 
+use crate::messages::keepalive::KeepaliveMessage;
+use crate::messages::notification::NotificationMessage;
+use crate::messages::open::OpenMessage;
+use crate::messages::route_refresh::RouteRefreshMessage;
+use crate::messages::update::UpdateMessage;
 
-
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Event {
     // Administrative events
     ManualStart,
@@ -53,15 +56,16 @@ pub enum Event {
     TcpConnectionConfirmed,
     TcpConnectionFails,
     // BGP message events
-    BGPOpen,
+    OpenMsg(OpenMessage),
     BGPOpenWithDelayOpenTimerRunning,
     BGPHeaderErr,
     BGPOpenMsgErr,
     OpenCollisionDump,
     NotifMsgVerErr,
-    NotifMsg,
+    NotifMsg(NotificationMessage),
     KeepAliveMsg,
-    UpdateMsg,
+    UpdateMsg(UpdateMessage),
+    RouteRefreshMsg(RouteRefreshMessage), // custom event I added to handle the message type
     UpdateMsgErr
 
 

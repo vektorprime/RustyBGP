@@ -10,6 +10,7 @@ use crate::timers::*;
 use crate::messages::update::*;
 use crate::errors::*;
 use crate::errors::BGPError::Message;
+use crate::errors::EventError::UnhandledEvent;
 use crate::routes::RouteV4;
 use crate::finite_state_machine::events::Event;
 
@@ -180,7 +181,7 @@ impl Neighbor {
 
     }
 
-    pub fn handle_event(&mut self, event: Event, tcp_stream: &mut TcpStream) -> Result<(), BGPError> {
+    pub async fn handle_event(&mut self, event: Event, tcp_stream: &mut TcpStream) -> Result<(), BGPError> {
         // TODO move the tcp_stream into the neighbor probably in between bgp.run and neighbor.run
         match self.fsm.state {
             State::Idle => {
@@ -204,14 +205,14 @@ impl Neighbor {
                     Event::ManualStartWithPassiveTcpEstablishment => {
                         self.fsm.connect_retry_counter = 0;
                         self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
-                        // TODO start TCP listener or return result to do it
+                        // We are already listening for TCP connections so we should just go straight to active
                         self.fsm.state = State::Active;
                         Ok(())
                     },
                     Event::AutomaticStartWithPassiveTcpEstablishment => {
                         self.fsm.connect_retry_counter = 0;
                         self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
-                        // TODO start TCP listener or return result to do it
+                        // We are already listening for TCP connections so we should just go straight to active
                         self.fsm.state = State::Active;
                         Ok(())
                     },
@@ -230,7 +231,8 @@ impl Neighbor {
                         Ok(())
                     },
                     _ => {
-                        panic!("Unhandled event in State::Idle")
+                        println!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
+                        Err(EventError::UnhandledEvent.into())
                     }
                 }
             },
@@ -354,7 +356,7 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::AutomaticStop | Event::HoldTimerExpires | Event::KeepaliveTimerExpires |
-                        Event::IdleHoldTimerExpires | Event::BGPOpen => {
+                        Event::IdleHoldTimerExpires | Event::OpenMsg(_) => {
 
                         self.fsm.connect_retry_timer.stop();
                         self.fsm.delay_open_timer.stop();
@@ -368,9 +370,9 @@ impl Neighbor {
                         Ok(())
                     }
                     _ => {
-                        panic!("Unhandled event in State::Connect")
+                        println!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
+                        Err(EventError::UnhandledEvent.into())
                     }
-
 
                 }
             },
@@ -427,8 +429,8 @@ impl Neighbor {
                         }
                         else {
                             self.fsm.connect_retry_timer.stop();
-                            // TODO complete bgp init
-                            // TODO send open
+                            let open_message = OpenMessage::new(self.global_settings.version, self.global_settings.my_as, self.fsm.hold_time, self.global_settings.identifier, 0, None)?;
+                            send_open(tcp_stream, open_message).await?;
                             if self.fsm.hold_time < 240 {
                                 self.fsm.hold_timer.start(240);
                             }
@@ -498,8 +500,8 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::AutomaticStop | Event::HoldTimerExpires | Event::KeepaliveTimerExpires |
-                    Event::IdleHoldTimerExpires | Event::BGPOpen | Event::OpenCollisionDump |
-                    Event::NotifMsg | Event::KeepAliveMsg | Event::UpdateMsg | Event::UpdateMsgErr => {
+                    Event::IdleHoldTimerExpires | Event::OpenMsg(_) | Event::OpenCollisionDump |
+                    Event::NotifMsg(_) | Event::KeepAliveMsg | Event::UpdateMsg(_) | Event::RouteRefreshMsg(_) | Event::UpdateMsgErr => {
                         self.fsm.connect_retry_timer.stop();
                         // TODO drop tcp conn
                         self.fsm.connect_retry_counter += 1;
@@ -508,10 +510,10 @@ impl Neighbor {
                         }
                         self.fsm.state = State::Idle;
                         Ok(())
-
                     },
                     _ => {
-                        panic!("Unhandled event in State::Active")
+                        println!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
+                        Err(EventError::UnhandledEvent.into())
                     }
 
                 }
@@ -566,11 +568,14 @@ impl Neighbor {
                         self.fsm.state = State::Active;
                         Ok(())
                     },
-                    Event::BGPOpen => {
+                    Event::OpenMsg(msg) => {
                         self.fsm.delay_open_timer.stop();
                         self.fsm.connect_retry_timer.stop();
-                        // TODO send Keepalive
-
+                        send_keepalive(tcp_stream).await?;
+                        // TODO process Open (anything left?)
+                        if msg.hold_time < self.fsm.hold_time {
+                            self.negotiated_hold_time_sec = msg.hold_time;
+                        }
                         if self.negotiated_hold_time_sec == 0 {
                             self.fsm.hold_timer.stop();
                             self.fsm.keepalive_timer.stop();
@@ -615,8 +620,8 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires | Event::KeepaliveTimerExpires | Event::DelayOpenTimerExpires |
-                    Event::IdleHoldTimerExpires | Event::BGPOpenWithDelayOpenTimerRunning | Event::NotifMsg |
-                    Event::KeepAliveMsg | Event::UpdateMsg | Event::UpdateMsgErr => {
+                    Event::IdleHoldTimerExpires | Event::BGPOpenWithDelayOpenTimerRunning | Event::NotifMsg(_) | Event::RouteRefreshMsg(_) |
+                    Event::KeepAliveMsg | Event::UpdateMsg(_) | Event::UpdateMsgErr => {
                         // TODO send Notification with error code FSM error
                         self.fsm.connect_retry_timer.stop();
                         // TODO drop tcp conn
@@ -629,7 +634,8 @@ impl Neighbor {
 
                     },
                     _ => {
-                        panic!("Unhandled event in State::OpenSent")
+                        println!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
+                        Err(EventError::UnhandledEvent.into())
                     }
 
                 }
@@ -683,7 +689,7 @@ impl Neighbor {
                         // ignore second connection attempt
                         Ok(())
                     },
-                    Event::TcpConnectionFails | Event::NotifMsg => {
+                    Event::TcpConnectionFails | Event::NotifMsg(_) => {
                         self.fsm.connect_retry_timer.stop();
                         // TODO release BGP res.
                         // TODO drop TCP conn
@@ -701,7 +707,7 @@ impl Neighbor {
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
-                    Event::BGPOpen => {
+                    Event::OpenMsg(msg) => {
                         // TODO look into this step more
                         // TODO check for collision, if true break down conn
                         // TODO send notification with Cease
@@ -742,7 +748,7 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
-                    Event::BGPOpenWithDelayOpenTimerRunning | Event::UpdateMsg | Event::UpdateMsgErr => {
+                    Event::BGPOpenWithDelayOpenTimerRunning | Event::UpdateMsg(_) | Event::UpdateMsgErr => {
                         // TODO send Notification with code of FSM error
                         self.fsm.connect_retry_timer.stop();
                         // release resources
@@ -755,7 +761,8 @@ impl Neighbor {
                         Ok(())
                     },
                     _ => {
-                        panic!("Unhandled event in State::OpenConfirm")
+                        println!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
+                        Err(EventError::UnhandledEvent.into())
                     }
 
                 }
@@ -818,7 +825,8 @@ impl Neighbor {
                         // TODO track the second conn until an open is sent
                         Ok(())
                     },
-                    Event::BGPOpen => {
+                    Event::OpenMsg(msg) => {
+                        // TODO handle this
                         if self.fsm.collision_detect_established_state {
                             // check for collision
                             // IF COLLISION
@@ -839,7 +847,16 @@ impl Neighbor {
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
-                    Event::TcpConnectionFails | Event::NotifMsgVerErr | Event::NotifMsg => {
+                    Event::NotifMsg(msg) => {
+                        self.fsm.connect_retry_timer.stop();
+                        // TODO delete all routes for this conn.
+                        // TODO release BGP res.
+                        // TODO drop TCP conn
+                        self.fsm.connect_retry_counter += 1;
+                        self.fsm.state = State::Idle;
+                        Ok(())
+                    },
+                    Event::TcpConnectionFails | Event::NotifMsgVerErr  => {
                         self.fsm.connect_retry_timer.stop();
                         // TODO delete all routes for this conn.
                         // TODO release BGP res.
@@ -855,7 +872,7 @@ impl Neighbor {
                         // stay in Established
                         Ok(())
                     },
-                    Event::UpdateMsg => {
+                    Event::UpdateMsg(msg) => {
                         // TODO process Update
                         if self.negotiated_hold_time_sec > 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
@@ -876,6 +893,10 @@ impl Neighbor {
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
+                    Event::RouteRefreshMsg(msg) => {
+                        // TODO handle route refresh
+                        Ok(())
+                    }
                    Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
                         Event::BGPOpenWithDelayOpenTimerRunning | Event::BGPHeaderErr | Event::BGPOpenMsgErr => {
 
@@ -892,7 +913,8 @@ impl Neighbor {
                        Ok(())
                    },
                     _ => {
-                        panic!("Unhandled event in State::Established")
+                        println!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
+                        Err(EventError::UnhandledEvent.into())
                     }
                 }
             },
@@ -962,7 +984,6 @@ impl Neighbor {
                 // TODO handle route refresh
                 crate::messages::route_refresh::handle_route_refresh_message(tcp_stream, tsbuf)?
             }
-
         }
         Ok(())
     }
@@ -990,12 +1011,45 @@ impl Neighbor {
         }
     }
 
+    pub fn generate_event(&mut self, event: Event) {
+        self.events.push_back(event);
+    }
+
+    pub fn generate_event_from_message(&mut self, tsbuf: &Vec<u8>, message_type: MessageType) -> Result<(), BGPError> {
+        println!("{}", message_type);
+        match message_type {
+            MessageType::Open => {
+                let received_msg = extract_open_message(tsbuf)?;
+                self.events.push_back(Event::OpenMsg(received_msg));
+            },
+            MessageType::Update => {
+                let received_msg = extract_update_message(tsbuf)?;
+                self.events.push_back(Event::UpdateMsg(received_msg));
+            },
+            MessageType::Notification => {
+                // TODO create the func
+                // let received_msg = extract_notification_message(tsbuf)?;
+                //self.events.push_back(Event::NotifMsg(received_msg));
+            },
+            MessageType::Keepalive => {
+                self.events.push_back(Event::KeepAliveMsg);
+            },
+            MessageType::RouteRefresh => {
+                // TODO create the func
+                //let received_msg = extract_route_refresh_message(tsbuf)?;
+                //self.events.push_back(Event::RouteRefreshMsg(received_msg));
+            }
+        }
+        Ok(())
+    }
 }
 
+//
+// pub async fn unlock_arc() {
+//
+// }
 
-pub async fn unlock_arc() {
 
-}
 
 pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, all_neighbors: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
@@ -1005,32 +1059,31 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
     let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
     //let tcp_stream = ts;
     loop {
+        tsbuf.clear();
         //TODO check all timers and generate events as needed here
         {
             let mut all_neighbors = all_neighbors.lock().await;
             if let Some(n) = all_neighbors.get_mut(&peer_ip) {
                 n.check_timers_and_generate_events();
-                while let Some(e) = n.events.pop_back() {
-                    if let Err(e) = n.handle_event(e, &mut tcp_stream) {
-                        println!("Error: Unable to handle event {:#?}", e);
+                while let Some(e) = n.events.pop_front() {
+                    if let Err(e) = n.handle_event(e, &mut tcp_stream).await {
+                        println!("Error: Unable to handle event {:#?}, skipping", e);
                     }
                 }
             }
         }
+
         tcp_stream.readable().await.unwrap();
-        //read tcp stream into buf and save size read
-        let ip = match get_neighbor_ipv4_address_from_stream(&tcp_stream) {
-            Ok(i) => i,
-            Err(_) => {continue}
-        };
+
         match tcp_stream.try_read_buf(&mut tsbuf) {
             Ok(0) => {
                 {
                     let mut all_neighbors = all_neighbors.lock().await;
                     if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                        if n.is_established() {
-                            // TODO generate event about neighbor going from established to idle or active
-                        }
+                        n.generate_event(Event::TcpConnectionFails);
+                        // I should generate this event regardless because at this point we may or may not be established
+                        // if n.is_established() {
+                        // }
                     }
                 }
             },
@@ -1053,9 +1106,12 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
                                 let mut bgp = bgp_proc.lock().await;
                                 let mut all_neighbors = all_neighbors.lock().await;
                                 if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                                    if let Err(e) =  n.route_incoming_message_to_handler(&mut tcp_stream, m, &mut *bgp).await {
-                                        println!("Error handling message: {:#?}", e);
-                                    }
+                                    // if let Err(e) =  n.route_incoming_message_to_handler(&mut tcp_stream, m, &mut *bgp).await {
+                                    //     println!("Error handling message: {:#?}", e);
+                                    // }
+                                   if let Err(e) =  parse_packet_type(m).and_then(|mt| n.generate_event_from_message(&tsbuf, mt)) {
+                                       println!("Error: {:#?}, skipping message", e);
+                                   }
                                 }
 
                             }
@@ -1072,18 +1128,19 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
                 }
                 else {
                     println!("Error : Unable to use TCP Stream -  {:#?}", e);
+                    //return Err(NeighborError::TCPConnDied.into());
                     {
-                        //all_neighbors.lock().await;
-                        // TODO generate event of neighbor needs to be torn down
+                        let mut all_neighbors = all_neighbors.lock().await;
+                        if let Some(n) = all_neighbors.get_mut(&peer_ip) {
+                            n.generate_event(Event::TcpConnectionFails);
+
+                        }
                     }
-                    return Err(NeighborError::TCPConnDied.into());
-                    //return Err(e.into());
                 }
             }
             //let size = ts.read(&mut tsbuf[..]).unwrap();
             //println!("Data read from the stream: {:#x?}", &tsbuf.get(..size).unwrap());
         }
-        tsbuf.clear();
-    }
 
+    }
 }

@@ -10,6 +10,8 @@ use tokio::sync::Mutex;
 
 use crate::config::*;
 use crate::errors::*;
+use crate::finite_state_machine::events::Event;
+use crate::messages::BGPVersion;
 use crate::utils::*;
 use crate::messages::update::AS::AS4;
 use crate::neighbors;
@@ -28,10 +30,11 @@ async fn start_tcp(address: String, port: String) -> TcpListener {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct GlobalSettings {
     pub my_as: u16,
-    pub identifier:Ipv4Addr
+    pub identifier:Ipv4Addr,
+    pub version: BGPVersion,
 }
 
 #[derive(Debug)]
@@ -47,7 +50,8 @@ impl BGPProcess {
         let config = read_config_file(config_file_name);
         let global_settings = GlobalSettings {
             my_as: config.process_config.my_as,
-            identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap()
+            identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap(),
+            version: BGPVersion::V4,
         };
         BGPProcess {
             global_settings,
@@ -144,15 +148,19 @@ impl BGPProcess {
     //     // maybe at some point I will react to TCP events, or I'll rely on errors from write or read
     // }
 
+    pub async fn generate_event_for_all_neighbors(all_neighbors: &Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, event: Event) {
+        let mut neighbors = all_neighbors.lock().await;
 
+        for n in &mut *neighbors {
+            n.1.events.push_back(event.clone());
+        }
+    }
 
     pub async fn run(bgp_proc: Arc<Mutex<BGPProcess>>, address: String, port: String) {
-        //let mut connection_buffers: Vec<Vec<u8>> = Vec::new();
-        let mut all_neighbors = {
-            let bgp = bgp_proc.lock().await;
-            Arc::new(Mutex::new(BGPProcess::populate_neighbors_from_config(&bgp)))
-        };
-
+        // init
+        let all_neighbors =BGPProcess::populate_neighbors_from_config(&bgp_proc).await;
+        BGPProcess::generate_event_for_all_neighbors(&all_neighbors, Event::AutomaticStartWithPassiveTcpEstablishment).await;
+        //
 
         let listener = start_tcp(address, port).await;
         loop {
@@ -169,13 +177,16 @@ impl BGPProcess {
                         }
                     };
                     {
-                        let all_n = all_neighbors.lock().await;
+                        let mut all_n = all_neighbors.lock().await;
                         if let Err(e) = BGPProcess::validate_neighbor_ip_is_configured(&peer_ip, &all_n) {
                             println!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
                             continue;
                         }
+                        // TODO make this a helpder function or make it more concise
+                        if let Some(n) = all_n.get_mut(&peer_ip) {
+                            n.generate_event(Event::TcpCRAcked);
+                        }
                     }
-
 
                     let bgp_arc = Arc::clone(&bgp_proc);
                     let all_neighbors_arc = Arc::clone(&all_neighbors);
@@ -194,8 +205,8 @@ impl BGPProcess {
         }
     }
 
-    pub fn populate_neighbors_from_config(bgp_proc: &BGPProcess) -> HashMap<Ipv4Addr, Neighbor> {
-
+    pub async fn populate_neighbors_from_config(bgp_proc_arc: &Arc<Mutex<BGPProcess>>,) -> Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>> {
+        let bgp_proc = bgp_proc_arc.lock().await;
         let mut all_neighbors = HashMap::new();
         for nc in &bgp_proc.configured_neighbors {
             match Ipv4Addr::from_str(&nc.ip) {
@@ -221,6 +232,6 @@ impl BGPProcess {
             }
         }
 
-        all_neighbors
+        Arc::new(Mutex::new(all_neighbors))
     }
 }

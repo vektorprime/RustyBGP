@@ -421,7 +421,7 @@ impl PAdata {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct PathAttribute {
     pub flags: Flags,
     pub type_code: TypeCode,
@@ -674,7 +674,7 @@ impl PathAttribute {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct UpdateMessage {
     // min len is 23 bytes
     pub message_header: MessageHeader,

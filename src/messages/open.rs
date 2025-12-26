@@ -143,7 +143,7 @@ pub async fn send_update(stream: &mut TcpStream, message: UpdateMessage) -> Resu
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct OpenMessage {
     // min length 29 bytes
     pub message_header: MessageHeader,

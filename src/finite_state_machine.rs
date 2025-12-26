@@ -72,9 +72,9 @@ impl Default for FSM {
             accept_connections_unconfigured_peers: false,
             passive_tcp_establishment: true,
             track_tcp_state: true,
-            delay_open: true,
-            delay_open_time: 5,
-            delay_open_timer: Timer::new(5),
+            delay_open: false, // not commonly used
+            delay_open_time: 1,
+            delay_open_timer: Timer::new(1),
             send_notification_without_open: false,
             collision_detect_established_state: true,
         }

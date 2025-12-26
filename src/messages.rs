@@ -25,7 +25,7 @@ use crate::process::BGPProcess;
 //     Keepalive
 // }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum AddressFamily {
     IPv4,
     IPv6,
@@ -33,7 +33,7 @@ pub enum AddressFamily {
 
 
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum MessageType {
     Open,
     Update,
@@ -67,7 +67,7 @@ impl MessageType {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum BGPVersion {
     V4
 }
@@ -96,7 +96,7 @@ impl BGPVersion {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct OptionalParameter {
     param_type: u8,
     param_length: u8,
@@ -104,7 +104,7 @@ pub struct OptionalParameter {
     parameter_value: Vec<u8>, //variable length
 }
 
-pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, MessageError> {
+pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, BGPError> {
     match tsbuf.get(0..16) {
         Some(val) => {
             if val == [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -115,15 +115,15 @@ pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, MessageError> {
                     Some(3) => Ok(MessageType::Notification),
                     Some(4) => Ok(MessageType::Keepalive),
                     Some(5) => Ok(MessageType::RouteRefresh),
-                    _ => Err(MessageError::UnknownMessageType)
+                    _ => Err(MessageError::UnknownMessageType.into())
                 }
             }
             else {
-                Err(MessageError::NoMarkerFound)
+                Err(MessageError::NoMarkerFound.into())
             }
 
         }
-        None => Err(MessageError::BufferEmpty)
+        None => Err(MessageError::BufferEmpty.into())
     }
 }
 

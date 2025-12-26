@@ -39,7 +39,11 @@ pub enum MessageError {
     UpdateMessageLenTooLow,
     HelloTimeLessThanOne,
     HoldTimeLessThanThreeAndNotZero,
+}
 
+#[derive(PartialEq, Debug)]
+pub enum EventError {
+    UnhandledEvent,
 }
 
 #[derive(PartialEq, Debug)]
@@ -55,6 +59,7 @@ pub enum BGPError {
     Message(MessageError),
     Process(ProcessError),
     Timer(TimerError),
+    Event(EventError),
 }
 
 impl From<ProcessError> for BGPError {
@@ -70,6 +75,10 @@ impl From<MessageError> for BGPError {
     fn from(e: MessageError) -> BGPError {
         BGPError::Message(e)
     }
+}
+
+impl From<EventError> for BGPError {
+    fn from(e: EventError) -> BGPError { BGPError::Event(e) }
 }
 
 impl From<TimerError> for BGPError {

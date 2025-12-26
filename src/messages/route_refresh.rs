@@ -41,13 +41,13 @@ pub async fn send_route_refresh(stream: &mut TcpStream, afi: AddressFamily, safi
     Ok(())
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum SAFI {
     Unicast,
     Multicast
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct RouteRefreshMessage {
     pub message_header: MessageHeader,
     pub afi: AddressFamily, // 2 bytes
