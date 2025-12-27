@@ -15,7 +15,7 @@ use notification::*;
 
 use update::*;
 use crate::errors::{BGPError, MessageError};
-use crate::messages::route_refresh::handle_route_refresh_message;
+use crate::messages::route_refresh::{handle_route_refresh_message, RouteRefreshMessage};
 use crate::neighbors::Neighbor;
 use crate::process::BGPProcess;
 // pub enum Message {
@@ -32,6 +32,16 @@ pub enum AddressFamily {
 }
 
 
+//
+// #[derive(PartialEq, Debug, Clone)]
+// pub enum MessageEvent {
+//     // use these for the neighbor message queue
+//     Open(OpenMessage),
+//     Update(UpdateMessage),
+//     Notification(NotificationMessage),
+//     Keepalive,
+//     RouteRefresh(RouteRefreshMessage)
+// }
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum MessageType {

@@ -1,16 +1,16 @@
 use std::net::{ Ipv4Addr };
 use tokio::net::{TcpStream, TcpListener};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-
+use tokio::net::tcp::OwnedWriteHalf;
 use crate::messages::header::*;
 use crate::messages::*;
 
-pub async fn handle_keepalive_message(tcp_stream: &mut TcpStream) -> Result<(), MessageError> {
-    send_keepalive(tcp_stream).await?;
-    Ok(())
-}
+// pub async fn handle_keepalive_message(tcp_stream: &mut OwnedWriteHalf) -> Result<(), MessageError> {
+//     send_keepalive(tcp_stream).await?;
+//     Ok(())
+// }
 
-pub async fn send_keepalive(stream: &mut TcpStream) -> Result<(), MessageError> {
+pub async fn send_keepalive(stream: &mut OwnedWriteHalf) -> Result<(), MessageError> {
     //TODO add peer as input var and match against DB
     //TODO add periodic keepalives
     println!("Preparing to send Keepalive");
@@ -26,7 +26,6 @@ pub async fn send_keepalive(stream: &mut TcpStream) -> Result<(), MessageError> 
             Err(MessageError::UnableToWriteToTCPStream)
         }
     }
-
 }
 
 #[derive(PartialEq, Debug)]

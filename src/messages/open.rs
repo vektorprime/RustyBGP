@@ -3,6 +3,7 @@ use tokio::net::{TcpStream, TcpListener};
 //use std::io::{Read, Write};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use std::path::Path;
+use tokio::net::tcp::OwnedWriteHalf;
 use crate::errors::*;
 use crate::finite_state_machine::State;
 use crate::messages::header::*;
@@ -78,42 +79,42 @@ pub fn get_neighbor_ipv4_address_from_stream(tcp_stream: &TcpStream) -> Result<I
 }
 
 
-pub async fn test_net_advertisements(bgp_proc: &mut BGPProcess, tcp_stream: &mut TcpStream) -> Result<(), MessageError> {
-    let mut path_attributes: Vec<PathAttribute> = Vec::new();
+// pub async fn test_net_advertisements(bgp_proc: &mut BGPProcess, tcp_stream: &mut TcpStream) -> Result<(), MessageError> {
+//     let mut path_attributes: Vec<PathAttribute> = Vec::new();
+//
+//     let origin_pa = PathAttribute::new_origin(OriginType::IGP);
+//     path_attributes.push(origin_pa);
+//
+//     let as_list = vec![2];
+//     let as_path_pa = PathAttribute::new_as_path(as_list);
+//     path_attributes.push(as_path_pa);
+//
+//     let next_hop_pa = PathAttribute::new_next_hop(Ipv4Addr::new(10, 0, 0, 3));
+//     path_attributes.push(next_hop_pa);
+//
+//     let mut nlri: Vec<NLRI> = Vec::new();
+//     for net in &bgp_proc.configured_networks {
+//         nlri.push(net.nlri.clone());
+//     }
+//     //let nlri = vec![NLRI::new(Ipv4Addr::new(1,1,1,1), 32).unwrap()];
+//
+//     //let msg_len = 53;
+//     let message_header = MessageHeader::new(MessageType::Update, None)?;
+//     let update_message = UpdateMessage {
+//         message_header,
+//         withdrawn_route_len: 0,
+//         withdrawn_routes: None,
+//         total_path_attribute_len: 20,
+//         path_attributes: Some(path_attributes),
+//         nlri: Some(nlri),
+//     };
+//     send_update(tcp_stream, update_message).await?;
+//
+//     Ok(())
+// }
 
-    let origin_pa = PathAttribute::new_origin(OriginType::IGP);
-    path_attributes.push(origin_pa);
 
-    let as_list = vec![2];
-    let as_path_pa = PathAttribute::new_as_path(as_list);
-    path_attributes.push(as_path_pa);
-
-    let next_hop_pa = PathAttribute::new_next_hop(Ipv4Addr::new(10, 0, 0, 3));
-    path_attributes.push(next_hop_pa);
-
-    let mut nlri: Vec<NLRI> = Vec::new();
-    for net in &bgp_proc.configured_networks {
-        nlri.push(net.nlri.clone());
-    }
-    //let nlri = vec![NLRI::new(Ipv4Addr::new(1,1,1,1), 32).unwrap()];
-
-    //let msg_len = 53;
-    let message_header = MessageHeader::new(MessageType::Update, None)?;
-    let update_message = UpdateMessage {
-        message_header,
-        withdrawn_route_len: 0,
-        withdrawn_routes: None,
-        total_path_attribute_len: 20,
-        path_attributes: Some(path_attributes),
-        nlri: Some(nlri),
-    };
-    send_update(tcp_stream, update_message).await?;
-    
-    Ok(())
-}
-
-
-pub async fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(), MessageError> {
+pub async fn send_open(stream: &mut OwnedWriteHalf, message: OpenMessage) -> Result<(), MessageError> {
     println!("Preparing to send Open");
     let message_bytes = message.convert_to_bytes();
     let res  =stream.write_all(&message_bytes[..]).await;
@@ -128,7 +129,7 @@ pub async fn send_open(stream: &mut TcpStream, message: OpenMessage) -> Result<(
     }
 }
 
-pub async fn send_update(stream: &mut TcpStream, message: UpdateMessage) -> Result<(), MessageError> {
+pub async fn send_update(stream: &mut OwnedWriteHalf, message: UpdateMessage) -> Result<(), MessageError> {
     println!("Preparing to send Update");
     let message_bytes = message.convert_to_bytes();
     let res  =stream.write_all(&message_bytes[..]).await;

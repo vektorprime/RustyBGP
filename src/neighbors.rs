@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use default::default;
 use tokio::net::TcpStream;
+use tokio::net::tcp::*;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use crate::sessions::*;
@@ -18,8 +19,8 @@ use crate::routes::RouteV4;
 use crate::finite_state_machine::events::Event;
 
 use crate::messages::{extract_messages_from_rec_data, parse_packet_type, BGPVersion, MessageType};
-use crate::messages::keepalive::{handle_keepalive_message, send_keepalive};
-use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, test_net_advertisements, OpenMessage};
+use crate::messages::keepalive::{send_keepalive};
+use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, OpenMessage};
 use crate::process::{BGPProcess, GlobalSettings};
 
 #[derive(Debug)]
@@ -50,6 +51,7 @@ pub struct Neighbor {
     pub ip_type: IPType,
     pub global_settings: GlobalSettings,
     pub events: VecDeque<Event>,
+    //pub send_queue: VecDeque<>:
 }
 
 impl Neighbor {
@@ -185,7 +187,7 @@ impl Neighbor {
 
     }
 
-    pub async fn handle_event(&mut self, event: Event, tcp_stream: &mut TcpStream) -> Result<(), BGPError> {
+    pub async fn handle_event(&mut self, event: Event, tcp_stream: &mut OwnedWriteHalf) -> Result<(), BGPError> {
         // TODO move the tcp_stream into the neighbor probably in between bgp.run and neighbor.run
         match self.fsm.state {
             State::Idle => {
@@ -1004,7 +1006,7 @@ impl Neighbor {
         // tokio::spawn( async {
         //
         // });
-        println!("executing check_timers_and_generate_events");
+        //println!("executing check_timers_and_generate_events");
         if let Ok(true) = self.fsm.connect_retry_timer.is_elapsed() {
             println!("connect_retry_timer elapsed for neighbor {:#?}, generating event", self.ip);
             self.events.push_back(Event::ConnectRetryTimerExpires);
@@ -1063,6 +1065,9 @@ impl Neighbor {
         }
         Ok(())
     }
+
+
+
 }
 
 //
@@ -1081,6 +1086,8 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
     //let tcp_stream = ts;
 
 
+    let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
+
     let all_neighbors_arc = Arc::clone(&all_neighbors);
     tokio::spawn( async move {
         loop {
@@ -1092,37 +1099,41 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
             }
             // sleep outside of this so we don't hold a mutex
             sleep(Duration::from_secs(1)).await;
-
         }
     });
 
-    loop {
-        tsbuf.clear();
-
-        //TODO check all timers and generate events as needed here
-        {
-            let mut all_neighbors = all_neighbors.lock().await;
+    let all_neighbors_handle_arc = Arc::clone(&all_neighbors);
+    tokio::spawn( async move {
+        loop {
+            //TODO check all timers and generate events as needed here
+            let mut all_neighbors = all_neighbors_handle_arc.lock().await;
             if let Some(n) = all_neighbors.get_mut(&peer_ip) {
                 //n.check_timers_and_generate_events();
                 while let Some(e) = n.events.pop_front() {
-                    if let Err(e) = n.handle_event(e, &mut tcp_stream).await {
+                    if let Err(e) = n.handle_event(e, &mut tcp_write_stream).await {
                         println!("Error: Unable to handle event {:#?}, skipping", e);
                     }
                 }
             }
-        }
 
+        }
+    });
+
+
+    let all_neighbors_event_arc = Arc::clone(&all_neighbors);
+    loop {
+        tsbuf.clear();
         // TODO move the TCP stream to its own task, and also create a message queue handler similar to our event handler
         // The above will allow us to not block the event handler
         // I could also use message passing
         // Also will look into Arc Mutex for the TCP stream as that would be really simple.
         // I don't want to go Arc Mutex crazy because we'll just end up locking a lot.
-        tcp_stream.readable().await;
+        tcp_read_stream.readable().await.unwrap();
 
-        match tcp_stream.try_read_buf(&mut tsbuf) {
+        match tcp_read_stream.try_read_buf(&mut tsbuf) {
             Ok(0) => {
                 {
-                    let mut all_neighbors = all_neighbors.lock().await;
+                    let mut all_neighbors = all_neighbors_event_arc.lock().await;
                     if let Some(n) = all_neighbors.get_mut(&peer_ip) {
                         n.generate_event(Event::TcpConnectionFails);
                         // I should generate this event regardless because at this point we may or may not be established
@@ -1147,7 +1158,7 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
                     Ok(messages) => {
                         for m in &messages {
                             {
-                                let mut bgp = bgp_proc.lock().await;
+                                //let mut bgp = bgp_proc.lock().await;
                                 let mut all_neighbors = all_neighbors.lock().await;
                                 if let Some(n) = all_neighbors.get_mut(&peer_ip) {
                                     // if let Err(e) =  n.route_incoming_message_to_handler(&mut tcp_stream, m, &mut *bgp).await {
