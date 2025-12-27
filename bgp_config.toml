@@ -11,5 +11,5 @@ prefix = "10.0.0.0/24"
 [[neighbors_config]]
 ip = "10.0.0.23"
 as_num = 1
-hello_time = 60
-hold_time = 180
+hello_time = 30
+hold_time = 90

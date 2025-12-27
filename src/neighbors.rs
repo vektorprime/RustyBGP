@@ -2,8 +2,11 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::time::Duration;
+use default::default;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use crate::sessions::*;
 use crate::finite_state_machine::*;
 use crate::timers::*;
@@ -41,8 +44,7 @@ pub struct Neighbor {
     //pub hello_time_sec: u16,
     //pub hold_time_sec: u16,
     //pub hold_timer: Timer,
-    // TODO make negotiated Option
-    pub negotiated_hold_time_sec: u16,
+    //pub negotiated_hold_time_sec: u16,
     pub routes_v4: Vec<RouteV4>,
     pub peer_type: PeerType,
     pub ip_type: IPType,
@@ -51,7 +53,6 @@ pub struct Neighbor {
 }
 
 impl Neighbor {
-
     pub fn set_keepalive_time(&mut self, keepalive_time_sec: u16) -> Result<(), MessageError> {
         if keepalive_time_sec < 1 {
             return Err(MessageError::HelloTimeLessThanOne);
@@ -85,12 +86,15 @@ impl Neighbor {
             return Err(MessageError::HoldTimeLessThanThreeAndNotZero);
         }
 
+        let fsm = FSM {
+            hold_time: hold_time_sec,
+            ..default()
+        };
 
         Ok(Neighbor {
             fsm: FSM::default(),
             ip,
             as_num,
-            negotiated_hold_time_sec: hold_time_sec,
             routes_v4: Vec::new(),
             peer_type,
             ip_type: IPType::V4,
@@ -317,7 +321,7 @@ impl Neighbor {
                         // TODO send Keepalive
                         if self.fsm.hold_time != 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
-                            self.fsm.hold_timer.start(self.negotiated_hold_time_sec);
+                            self.fsm.hold_timer.start(self.fsm.hold_time);
                         }
                         else {
                             self.fsm.keepalive_timer.stop();
@@ -461,7 +465,7 @@ impl Neighbor {
                         // TODO send keepalive
                         if self.fsm.hold_time != 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
-                            self.fsm.hold_timer.start(self.negotiated_hold_time_sec);
+                            self.fsm.hold_timer.start(self.fsm.hold_time);
                         }
                         else {
                             self.fsm.keepalive_timer.stop();
@@ -574,15 +578,15 @@ impl Neighbor {
                         send_keepalive(tcp_stream).await?;
                         // TODO process Open (anything left?)
                         if msg.hold_time < self.fsm.hold_time {
-                            self.negotiated_hold_time_sec = msg.hold_time;
+                            self.fsm.hold_time = msg.hold_time;
                         }
-                        if self.negotiated_hold_time_sec == 0 {
+                        if self.fsm.hold_time == 0 {
                             self.fsm.hold_timer.stop();
                             self.fsm.keepalive_timer.stop();
                         }
                         else {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
-                            self.fsm.hold_timer.start(self.negotiated_hold_time_sec);
+                            self.fsm.hold_timer.start(self.fsm.hold_time);
                         }
                         self.fsm.state = State::OpenConfirm;
                         Ok(())
@@ -744,6 +748,7 @@ impl Neighbor {
                     },
                     Event::KeepAliveMsg => {
                         self.fsm.hold_timer.start(self.fsm.hold_time);
+                        println!("Setting neighbor {:#?} state to Established", self.ip);
                         self.fsm.state = State::Established;
                         Ok(())
                     },
@@ -805,14 +810,14 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::KeepaliveTimerExpires => {
-                        // TODO send Keepalive
-                        if self.negotiated_hold_time_sec > 0 {
+                        send_keepalive(tcp_stream).await?;
+                        if self.fsm.hold_time > 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
+                        } else {
+                            println!("hold_time is 0, skipping Keepalive");
                         }
                         Ok(())
                     },
-                    // TODO restart keepalive timer everytime a keepalive or update msg is sent
-
                     Event::TcpConnectionValid => {
                         // TODO track the second conn
                         Ok(())
@@ -866,15 +871,17 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::KeepAliveMsg => {
-                        if self.negotiated_hold_time_sec > 0 {
-                            self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
+                        if self.fsm.hold_time > 0 {
+                            self.fsm.hold_timer.start(self.fsm.hold_time);
+                        } else {
+                            println!("Received Keepalive, but our hold_time is 0, skipping Keepalive");
                         }
                         // stay in Established
                         Ok(())
                     },
                     Event::UpdateMsg(msg) => {
                         // TODO process Update
-                        if self.negotiated_hold_time_sec > 0 {
+                        if self.fsm.hold_time > 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
                         }
                         // stay in Established
@@ -923,34 +930,34 @@ impl Neighbor {
 
 
 
-    pub async fn handle_open_message(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
-        // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
-        // compare the open message params to configured neighbor
-        let received_open = extract_open_message(tsbuf)?;
-
-        //let peer_ip = get_neighbor_ipv4_address_from_stream(tcp_stream)?;
-
-        if self.is_established() {
-            return Err(NeighborError::NeighborAlreadyEstablished.into())
-        }
-
-
-        //let neighbor = bgp_proc.neighbors.get_mut(&peer_ip).ok_or_else(|| NeighborError::PeerIPNotRecognized)?;
-        let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.global_settings.my_as, self.fsm.hold_time, bgp_proc.global_settings.identifier, 0, None)?;
-        send_open(tcp_stream, open_message).await?;
-        send_keepalive(tcp_stream).await?;
-        //TODO handle this error so it doesn't return
-        self.set_hold_time(received_open.hold_time)?;
-        self.fsm.state = State::Established;
-
-        //add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
-
-        // TODO REMOVE AFTER TESTING IT WORKS HERE
-        test_net_advertisements(bgp_proc, tcp_stream).await?;
-
-        Ok(())
-
-    }
+    // pub async fn handle_open_message(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+    //     // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
+    //     // compare the open message params to configured neighbor
+    //     let received_open = extract_open_message(tsbuf)?;
+    //
+    //     //let peer_ip = get_neighbor_ipv4_address_from_stream(tcp_stream)?;
+    //
+    //     if self.is_established() {
+    //         return Err(NeighborError::NeighborAlreadyEstablished.into())
+    //     }
+    //
+    //
+    //     //let neighbor = bgp_proc.neighbors.get_mut(&peer_ip).ok_or_else(|| NeighborError::PeerIPNotRecognized)?;
+    //     let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.global_settings.my_as, self.fsm.hold_time, bgp_proc.global_settings.identifier, 0, None)?;
+    //     send_open(tcp_stream, open_message).await?;
+    //     send_keepalive(tcp_stream).await?;
+    //     //TODO handle this error so it doesn't return
+    //     self.set_hold_time(received_open.hold_time)?;
+    //     self.fsm.state = State::Established;
+    //
+    //     //add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
+    //
+    //     // TODO REMOVE AFTER TESTING IT WORKS HERE
+    //     test_net_advertisements(bgp_proc, tcp_stream).await?;
+    //
+    //     Ok(())
+    //
+    // }
 
     pub async fn handle_update_message(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
         println!("Handling update message");
@@ -964,49 +971,58 @@ impl Neighbor {
     }
 
 
-    pub async fn route_incoming_message_to_handler(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
-        let message_type = parse_packet_type(&tsbuf)?;
-        println!("{}", message_type);
-        match message_type {
-            MessageType::Open => {
-                self.handle_open_message(tcp_stream, tsbuf, bgp_proc).await?
-            },
-            MessageType::Update => {
-                self.handle_update_message(tcp_stream, tsbuf, bgp_proc).await?
-            },
-            MessageType::Notification => {
-                crate::messages::notification::handle_notification_message(tcp_stream, tsbuf, bgp_proc).await?;
-            },
-            MessageType::Keepalive => {
-                handle_keepalive_message(tcp_stream).await?
-            },
-            MessageType::RouteRefresh => {
-                // TODO handle route refresh
-                crate::messages::route_refresh::handle_route_refresh_message(tcp_stream, tsbuf)?
-            }
-        }
-        Ok(())
-    }
+    // pub async fn route_incoming_message_to_handler(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+    //     let message_type = parse_packet_type(&tsbuf)?;
+    //     println!("{}", message_type);
+    //     match message_type {
+    //         MessageType::Open => {
+    //             self.handle_open_message(tcp_stream, tsbuf, bgp_proc).await?
+    //         },
+    //         MessageType::Update => {
+    //             self.handle_update_message(tcp_stream, tsbuf, bgp_proc).await?
+    //         },
+    //         MessageType::Notification => {
+    //             crate::messages::notification::handle_notification_message(tcp_stream, tsbuf, bgp_proc).await?;
+    //         },
+    //         MessageType::Keepalive => {
+    //             handle_keepalive_message(tcp_stream).await?
+    //         },
+    //         MessageType::RouteRefresh => {
+    //             // TODO handle route refresh
+    //             crate::messages::route_refresh::handle_route_refresh_message(tcp_stream, tsbuf)?
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     pub fn is_established(&self) -> bool {
         if self.fsm.state == State::Established { true }
         else { false }
     }
 
-    pub fn check_timers_and_generate_events(&mut self) {
+    pub async fn check_timers_and_generate_events(&mut self) {
+        // tokio::spawn( async {
+        //
+        // });
+        println!("executing check_timers_and_generate_events");
         if let Ok(true) = self.fsm.connect_retry_timer.is_elapsed() {
-           self.events.push_back(Event::ConnectRetryTimerExpires);
+            println!("connect_retry_timer elapsed for neighbor {:#?}, generating event", self.ip);
+            self.events.push_back(Event::ConnectRetryTimerExpires);
         }
         if let Ok(true) = self.fsm.hold_timer.is_elapsed() {
+            println!("hold_timer elapsed for neighbor {:#?}, generating event", self.ip);
             self.events.push_back(Event::HoldTimerExpires);
         }
         if let Ok(true) = self.fsm.keepalive_timer.is_elapsed() {
+            println!("keepalive_timer elapsed for neighbor {:#?}, generating event", self.ip);
             self.events.push_back(Event::KeepaliveTimerExpires);
         }
         if let Ok(true) = self.fsm.delay_open_timer.is_elapsed() {
+            println!("delay_open_timer elapsed for neighbor {:#?}, generating event", self.ip);
             self.events.push_back(Event::DelayOpenTimerExpires);
         }
         if let Ok(true) = self.fsm.idle_hold_timer.is_elapsed() {
+            println!("idle_hold_timer elapsed for neighbor {:#?}, generating event", self.ip);
             self.events.push_back(Event::IdleHoldTimerExpires);
         }
     }
@@ -1020,23 +1036,28 @@ impl Neighbor {
         match message_type {
             MessageType::Open => {
                 let received_msg = extract_open_message(tsbuf)?;
+                println!("Generating Event::OpenMsg for neighbor {:#?}", self.ip);
                 self.events.push_back(Event::OpenMsg(received_msg));
             },
             MessageType::Update => {
                 let received_msg = extract_update_message(tsbuf)?;
+                println!("Generating Event::UpdateMsg for neighbor {:#?}", self.ip);
                 self.events.push_back(Event::UpdateMsg(received_msg));
             },
             MessageType::Notification => {
                 // TODO create the func
                 // let received_msg = extract_notification_message(tsbuf)?;
+                println!("Generating Event::NotifMsg for neighbor {:#?}", self.ip);
                 //self.events.push_back(Event::NotifMsg(received_msg));
             },
             MessageType::Keepalive => {
+                println!("Generating Event::KeepAliveMsg for neighbor {:#?}", self.ip);
                 self.events.push_back(Event::KeepAliveMsg);
             },
             MessageType::RouteRefresh => {
                 // TODO create the func
                 //let received_msg = extract_route_refresh_message(tsbuf)?;
+                println!("Generating Event::RouteRefreshMsg for neighbor {:#?}", self.ip);
                 //self.events.push_back(Event::RouteRefreshMsg(received_msg));
             }
         }
@@ -1058,13 +1079,31 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
     // TODO determine if we want to honor the above rule or not, if not, how should we handle it
     let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
     //let tcp_stream = ts;
+
+
+    let all_neighbors_arc = Arc::clone(&all_neighbors);
+    tokio::spawn( async move {
+        loop {
+            {
+                let mut all_neighbors = all_neighbors_arc.lock().await;
+                if let Some(n) = all_neighbors.get_mut(&peer_ip) {
+                    n.check_timers_and_generate_events().await;
+                }
+            }
+            // sleep outside of this so we don't hold a mutex
+            sleep(Duration::from_secs(1)).await;
+
+        }
+    });
+
     loop {
         tsbuf.clear();
+
         //TODO check all timers and generate events as needed here
         {
             let mut all_neighbors = all_neighbors.lock().await;
             if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                n.check_timers_and_generate_events();
+                //n.check_timers_and_generate_events();
                 while let Some(e) = n.events.pop_front() {
                     if let Err(e) = n.handle_event(e, &mut tcp_stream).await {
                         println!("Error: Unable to handle event {:#?}, skipping", e);
@@ -1073,7 +1112,12 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
             }
         }
 
-        tcp_stream.readable().await.unwrap();
+        // TODO move the TCP stream to its own task, and also create a message queue handler similar to our event handler
+        // The above will allow us to not block the event handler
+        // I could also use message passing
+        // Also will look into Arc Mutex for the TCP stream as that would be really simple.
+        // I don't want to go Arc Mutex crazy because we'll just end up locking a lot.
+        tcp_stream.readable().await;
 
         match tcp_stream.try_read_buf(&mut tsbuf) {
             Ok(0) => {

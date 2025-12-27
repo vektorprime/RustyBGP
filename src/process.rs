@@ -149,8 +149,8 @@ impl BGPProcess {
     // }
 
     pub async fn generate_event_for_all_neighbors(all_neighbors: &Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, event: Event) {
+        println!("Generating event {:#?} for all neighbors", event);
         let mut neighbors = all_neighbors.lock().await;
-
         for n in &mut *neighbors {
             n.1.events.push_back(event.clone());
         }
@@ -231,6 +231,9 @@ impl BGPProcess {
                 }
             }
         }
+        println!();
+        println!("Populated the following BGP neighbors from config {:#?}", all_neighbors);
+        println!();
 
         Arc::new(Mutex::new(all_neighbors))
     }

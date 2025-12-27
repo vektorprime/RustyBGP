@@ -6,6 +6,7 @@ version = 4
 name = "bgprtr"
 version = "0.1.0"
 dependencies = [
+ "default",
  "serde",
  "tokio",
  "toml",
@@ -28,6 +29,12 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "default"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f33853de3c94db27f825215641be74ddce259f5aec7aefae9c760ee1bb3dbaa7"
 
 [[package]]
 name = "equivalent"
