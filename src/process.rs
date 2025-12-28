@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::{TcpListener};
 use tokio::sync::Mutex;
-
-
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 use crate::config::*;
 use crate::errors::*;
 use crate::finite_state_machine::events::Event;
@@ -16,6 +16,7 @@ use crate::utils::*;
 use crate::messages::update::AS::AS4;
 use crate::neighbors;
 use crate::neighbors::{Neighbor, PeerType};
+use crate::routes::{RouteV4, NLRI};
 
 async fn start_tcp(address: String, port: String) -> TcpListener {
     let listener = TcpListener::bind(address + ":" + &port).await;
@@ -36,13 +37,20 @@ pub struct GlobalSettings {
     pub identifier:Ipv4Addr,
     pub version: BGPVersion,
 }
-
+#[derive(Debug)]
+pub struct RouteChannel {
+    pub tx: mpsc::Sender<RouteV4>,
+    pub rx: mpsc::Receiver<RouteV4>,
+}
 #[derive(Debug)]
 pub struct BGPProcess {
     pub global_settings: GlobalSettings,
     //pub neighbors: HashMap<Ipv4Addr, Neighbor>,
     pub configured_neighbors: Vec<NeighborConfig>,
     pub configured_networks: Vec<NetAdvertisementsConfig>,
+    // TODO changes to loc-rib generate events to all neighbors to send update
+    pub loc_rib: HashMap<NLRI, Vec<RouteV4>>,
+    pub neighbors_channels: HashMap<Ipv4Addr, RouteChannel>,
 }
 
 impl BGPProcess {
@@ -58,6 +66,8 @@ impl BGPProcess {
             //neighbors: HashMap::new(),
             configured_neighbors: config.neighbors_config,
             configured_networks: config.net_advertisements_config,
+            loc_rib: HashMap::new(),
+            neighbors_channels: HashMap::new(),
         }
     }
 
@@ -192,7 +202,7 @@ impl BGPProcess {
                     let all_neighbors_arc = Arc::clone(&all_neighbors);
                     tokio::spawn(async move {
                         // get the neighbor and pass the tcp conn
-                        if let Err(e) = neighbors::run(tcp_stream, bgp_arc, all_neighbors_arc, peer_ip).await {
+                        if let Err(e) = neighbors::run_neighbor_loop(tcp_stream, bgp_arc, all_neighbors_arc, peer_ip).await {
                             println!("Error: Unable to continue run() for neighbor {:#?} - {:#?}", peer_ip, e);
                         }
                     });
@@ -206,17 +216,34 @@ impl BGPProcess {
     }
 
     pub async fn populate_neighbors_from_config(bgp_proc_arc: &Arc<Mutex<BGPProcess>>,) -> Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>> {
-        let bgp_proc = bgp_proc_arc.lock().await;
+        let mut bgp_proc = bgp_proc_arc.lock().await;
         let mut all_neighbors = HashMap::new();
+        all_neighbors.reserve(10);
+        let my_as = bgp_proc.global_settings.my_as;
+        let global_settings = bgp_proc.global_settings;
+        let mut temp_neighbors_channels: HashMap<Ipv4Addr, RouteChannel> = HashMap::new();
+        temp_neighbors_channels.reserve(10);
         for nc in &bgp_proc.configured_neighbors {
             match Ipv4Addr::from_str(&nc.ip) {
                 Ok(ip) => {
-                    let peer_type = if bgp_proc.global_settings.my_as == nc.as_num {
+                    let peer_type = if my_as == nc.as_num {
                         PeerType::Internal
                     } else {
                         PeerType::External
                     };
-                    match Neighbor::new(ip, AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, &bgp_proc.global_settings) {
+                    let (tx_to_bgp, rx_from_neighbor)  = mpsc::channel::<RouteV4>(65535);
+                    let (tx_to_neighbor, rx_from_bgp) = mpsc::channel::<RouteV4>(65535);
+                    let neighbors_channels = RouteChannel {
+                        rx: rx_from_neighbor,
+                        tx: tx_to_neighbor,
+                    };
+                    let bgp_channel = RouteChannel {
+                        rx: rx_from_bgp,
+                        tx: tx_to_bgp,
+                    };
+                    // need to use a temp HashMap because we already borrowed bgp_proc as mutable
+                    temp_neighbors_channels.insert(ip, neighbors_channels);
+                    match Neighbor::new(ip, AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings, bgp_channel) {
                         Ok(neighbor) => {
                             all_neighbors.insert(ip, neighbor);
                         },
@@ -231,6 +258,7 @@ impl BGPProcess {
                 }
             }
         }
+        bgp_proc.neighbors_channels.extend(temp_neighbors_channels);
         println!();
         println!("Populated the following BGP neighbors from config {:#?}", all_neighbors);
         println!();

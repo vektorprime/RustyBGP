@@ -13,9 +13,10 @@ pub enum RouteCast {
 }
 
 
-#[derive(PartialEq, Debug, Clone, Deserialize)]
+#[derive(Eq, Hash, PartialEq, Debug, Clone, Deserialize)]
 #[serde(try_from = "String")]
 pub struct NLRI {
+    // TODO validate prefix len
     pub len: u8,
     // TODO handle bigger prefixes and padding/trailing bits so that this falls on a byte boundary
     pub prefix: Ipv4Addr
@@ -78,14 +79,15 @@ impl TryFrom<String> for NLRI {
 
 #[derive(Debug)]
 pub struct RouteV4 {
-    //route_cast: RouteCast,
-    // TODO validate prefix len
+    // route_cast: RouteCast,
+    // Maybe at some point I'll try handling multicast routes once. It's pretty rare to need BGP's multicast AF.
+    // TODO re-evaluate if I want nlri out of here since it's the key for the hasmap
     pub nlri: NLRI,
     // mandatory
     pub origin: Origin,
     pub as_path: AsPath,
     pub next_hop: NextHop,
-    // required/should for ibgp
+    // should be set for ibgp
     pub local_pref: Option<LocalPref>,
     // discretionary
     pub multi_exit_disc: Option<MultiExitDisc>,

@@ -15,13 +15,13 @@ use crate::messages::update::*;
 use crate::errors::*;
 use crate::errors::BGPError::Message;
 use crate::errors::EventError::UnhandledEvent;
-use crate::routes::RouteV4;
+use crate::routes::{RouteV4, NLRI};
 use crate::finite_state_machine::events::Event;
 
 use crate::messages::{extract_messages_from_rec_data, parse_packet_type, BGPVersion, MessageType};
 use crate::messages::keepalive::{send_keepalive};
 use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, OpenMessage};
-use crate::process::{BGPProcess, GlobalSettings};
+use crate::process::{BGPProcess, GlobalSettings, RouteChannel};
 
 #[derive(Debug)]
 pub enum IPType {
@@ -46,13 +46,49 @@ pub struct Neighbor {
     //pub hold_time_sec: u16,
     //pub hold_timer: Timer,
     //pub negotiated_hold_time_sec: u16,
-    pub routes_v4: Vec<RouteV4>,
+    //pub routes_v4: Vec<RouteV4>,
     pub peer_type: PeerType,
     pub ip_type: IPType,
     pub global_settings: GlobalSettings,
     pub events: VecDeque<Event>,
-    //pub send_queue: VecDeque<>:
+    // TODO adj-rib-in filters routes coming in, then generates events to loc-rib with the route, trigger best path calc here
+    pub adj_rib_in: HashMap<NLRI, Vec<RouteV4>>,
+    // TODO adj-rib-out filters routes before they are sent to neighbor, generate event to send update
+    pub adj_rib_out: HashMap<NLRI, Vec<RouteV4>>,
+    pub route_channel: RouteChannel
 }
+
+
+pub async fn run_timer_loop(all_neighbors_arc: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, peer_ip: Ipv4Addr) {
+    tokio::spawn( async move {
+        loop {
+            {
+                let mut all_neighbors = all_neighbors_arc.lock().await;
+                if let Some(n) = all_neighbors.get_mut(&peer_ip) {
+                    n.check_timers_and_generate_events().await;
+                }
+            }
+            // sleep outside of this so we don't hold a mutex
+            sleep(Duration::from_secs(1)).await;
+        }
+    });
+}
+
+pub async fn run_event_loop(all_neighbors: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, mut tcp_stream: OwnedWriteHalf, peer_ip: Ipv4Addr) {
+    tokio::spawn( async move {
+        loop {
+            let mut all_neighbors = all_neighbors.lock().await;
+            if let Some(n) = all_neighbors.get_mut(&peer_ip) {
+                while let Some(e) = n.events.pop_front() {
+                    if let Err(e) = n.handle_event(e, &mut tcp_stream).await {
+                        println!("Error: Unable to handle event {:#?}, skipping", e);
+                    }
+                }
+            }
+        }
+    });
+}
+
 
 impl Neighbor {
     pub fn set_keepalive_time(&mut self, keepalive_time_sec: u16) -> Result<(), MessageError> {
@@ -71,15 +107,7 @@ impl Neighbor {
         Ok(())
     }
 
-    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: &GlobalSettings) -> Result<Neighbor, MessageError> {
-        //pub fn new(ip: IpAddr, hold_time_sec: u16, keepalive_time_sec: u16) -> Result<Neighbor, NeighborError> {
-        // if keepalive_time_sec > hold_time_sec {
-        //     return Err(NeighborError::KeepaliveGreaterThanHoldTime)
-        // }
-        // else if keepalive_time_sec == hold_time_sec {
-        //     return Err(NeighborError::KeepaliveEqualToHoldTime)
-        // }
-
+    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: GlobalSettings, route_channel: RouteChannel) -> Result<Neighbor, MessageError> {
         if keepalive_time_sec < 1 {
             return Err(MessageError::HelloTimeLessThanOne);
         }
@@ -97,22 +125,23 @@ impl Neighbor {
             fsm: FSM::default(),
             ip,
             as_num,
-            routes_v4: Vec::new(),
+            //routes_v4: Vec::new(),
             peer_type,
             ip_type: IPType::V4,
-            global_settings: settings.clone(), // we don't store a reference here because it gets too complicated
+            global_settings: settings, // we don't store a reference here because it gets too complicated
             // we'll update all neighbor from the BGP proc settings when anything changes.
             events: VecDeque::new(),
+            adj_rib_in: HashMap::new(),
+            adj_rib_out: HashMap::new(),
+            route_channel
         })
 
     }
 
     pub fn process_routes_from_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
 
-
         if let Some(nlri_coll) = update_message.nlri {
             let path_attributes = update_message.path_attributes.ok_or_else(|| MessageError::MissingPathAttributes)?;
-            //let needed_pa_list: Vec<TypeCode> = vec![TypeCode::Origin, TypeCode::AsPath, TypeCode::NextHop, TypeCode::LocalPref, TypeCode::MultiExitDisc, TypeCode::AtomicAggregate, TypeCode::Aggregator];
             let origin = {
                 let data = PathAttribute::get_pa_data_from_pa_vec(TypeCode::Origin, &path_attributes).ok_or_else(|| MessageError::MissingPathAttributes)?;
                 let PAdata::Origin(origin) = data else {
@@ -175,16 +204,17 @@ impl Neighbor {
             // let aggregator = PathAttribute::get_pa_data_from_pa_vec(TypeCode::Aggregator, &path_attributes);
             for nlri in &nlri_coll {
                 // debating if I should do the checks here or move more logic into new()
-                let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone() );
-                println!("Adding Route {:#?} to vec", rt);
-                self.routes_v4.push(rt);
+                let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone());
+                println!("Adding Route {:#?} to adj_rib_in", rt);
+                //self.routes_v4.push(rt);
+                let route_vec = vec![rt];
+                self.adj_rib_in.insert(nlri.clone(), route_vec);
             }
             Ok(())
         }
         else {
             Err(MessageError::MissingNLRI)
         }
-
     }
 
     pub async fn handle_event(&mut self, event: Event, tcp_stream: &mut OwnedWriteHalf) -> Result<(), BGPError> {
@@ -882,7 +912,7 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::UpdateMsg(msg) => {
-                        // TODO process Update
+                        self.process_routes_from_message(msg)?;
                         if self.fsm.hold_time > 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
                         }
@@ -961,7 +991,7 @@ impl Neighbor {
     //
     // }
 
-    pub async fn handle_update_message(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
+    pub async fn handle_update_message(&mut self, tsbuf: &Vec<u8>) -> Result<(), BGPError> {
         println!("Handling update message");
         if !self.is_established() {
             return Err(NeighborError::PeerIPNotEstablished.into())
@@ -997,15 +1027,16 @@ impl Neighbor {
     //     Ok(())
     // }
 
+
+
+
     pub fn is_established(&self) -> bool {
         if self.fsm.state == State::Established { true }
         else { false }
     }
 
     pub async fn check_timers_and_generate_events(&mut self) {
-        // tokio::spawn( async {
-        //
-        // });
+
         //println!("executing check_timers_and_generate_events");
         if let Ok(true) = self.fsm.connect_retry_timer.is_elapsed() {
             println!("connect_retry_timer elapsed for neighbor {:#?}, generating event", self.ip);
@@ -1065,19 +1096,10 @@ impl Neighbor {
         }
         Ok(())
     }
-
-
-
 }
 
-//
-// pub async fn unlock_arc() {
-//
-// }
 
-
-
-pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, all_neighbors: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
+pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, all_neighbors: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
 
     // max bgp msg size should never exceed 4096
@@ -1087,40 +1109,14 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
 
 
     let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
-
-    let all_neighbors_arc = Arc::clone(&all_neighbors);
-    tokio::spawn( async move {
-        loop {
-            {
-                let mut all_neighbors = all_neighbors_arc.lock().await;
-                if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                    n.check_timers_and_generate_events().await;
-                }
-            }
-            // sleep outside of this so we don't hold a mutex
-            sleep(Duration::from_secs(1)).await;
-        }
-    });
-
-    let all_neighbors_handle_arc = Arc::clone(&all_neighbors);
-    tokio::spawn( async move {
-        loop {
-            //TODO check all timers and generate events as needed here
-            let mut all_neighbors = all_neighbors_handle_arc.lock().await;
-            if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                //n.check_timers_and_generate_events();
-                while let Some(e) = n.events.pop_front() {
-                    if let Err(e) = n.handle_event(e, &mut tcp_write_stream).await {
-                        println!("Error: Unable to handle event {:#?}, skipping", e);
-                    }
-                }
-            }
-
-        }
-    });
+    // generates time events
+    run_timer_loop(Arc::clone(&all_neighbors), peer_ip).await;
+    // poops and handles events
+    run_event_loop(Arc::clone(&all_neighbors), tcp_write_stream, peer_ip).await;
 
 
-    let all_neighbors_event_arc = Arc::clone(&all_neighbors);
+
+    let all_neighbors_event_gen_arc = Arc::clone(&all_neighbors);
     loop {
         tsbuf.clear();
         // TODO move the TCP stream to its own task, and also create a message queue handler similar to our event handler
@@ -1133,12 +1129,9 @@ pub async fn run(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, al
         match tcp_read_stream.try_read_buf(&mut tsbuf) {
             Ok(0) => {
                 {
-                    let mut all_neighbors = all_neighbors_event_arc.lock().await;
+                    let mut all_neighbors = all_neighbors_event_gen_arc.lock().await;
                     if let Some(n) = all_neighbors.get_mut(&peer_ip) {
                         n.generate_event(Event::TcpConnectionFails);
-                        // I should generate this event regardless because at this point we may or may not be established
-                        // if n.is_established() {
-                        // }
                     }
                 }
             },

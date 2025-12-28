@@ -131,7 +131,6 @@ pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, BGPError> {
             else {
                 Err(MessageError::NoMarkerFound.into())
             }
-
         }
         None => Err(MessageError::BufferEmpty.into())
     }

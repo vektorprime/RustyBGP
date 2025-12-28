@@ -39,6 +39,7 @@ pub enum MessageError {
     UpdateMessageLenTooLow,
     HelloTimeLessThanOne,
     HoldTimeLessThanThreeAndNotZero,
+    BadAttributeTypeCode,
 }
 
 #[derive(PartialEq, Debug)]

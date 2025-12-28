@@ -122,17 +122,17 @@ pub enum TypeCode {
 }
 
 impl TypeCode {
-    pub fn from_u8(val: u8) -> Self {
+    pub fn from_u8(val: u8) -> Result<Self, MessageError> {
         match val {
             // 0 is reserved
-            1 => TypeCode::Origin,
-            2 => TypeCode::AsPath,
-            3 => TypeCode::NextHop,
-            4 => TypeCode::MultiExitDisc,
-            5 => TypeCode::LocalPref,
-            6 => TypeCode::AtomicAggregate,
-            7 => TypeCode::Aggregator,
-            _ => unreachable!()
+            1 => Ok(TypeCode::Origin),
+            2 => Ok(TypeCode::AsPath),
+            3 => Ok(TypeCode::NextHop),
+            4 => Ok(TypeCode::MultiExitDisc),
+            5 => Ok(TypeCode::LocalPref),
+            6 => Ok(TypeCode::AtomicAggregate),
+            7 => Ok(TypeCode::Aggregator),
+            _ => Err(MessageError::BadAttributeTypeCode)
         }
     }
 
@@ -686,7 +686,6 @@ pub struct UpdateMessage {
 }
 
 pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageError> {
-    // TODO I only copied this, I have not modified it yet
     println!("Extracting update message");
     let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
     if message_len < 23 {
@@ -757,7 +756,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
             let type_code = {
                 let val = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
                 TypeCode::from_u8(val)
-            };
+            }?;
             //println!("type_code {:#?}", type_code);
 
             current_idx += 1;
@@ -788,6 +787,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
             // parse the bytes we just read for the PA
             //let data = extract_path_attributes_from_data(&data_bytes, total_path_attribute_len);
             if !data_bytes.is_empty() {
+
                 // extract the PAdata object from the vec of bytes and create a new PathAtrribute object to be returned
                 let pa_data = PAdata::from_vec_u8(&type_code, &data_bytes);
                 //println!("pa_data is  {:#?}", pa_data);
