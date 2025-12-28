@@ -2,11 +2,18 @@ RustyBGP is my first attempt at routing protocol written in, you guessed it, Rus
 
 What is implemented:
 
-- Processing of BGP Open messages
+- Processing of the following BGP messages: Open, Keepalive, Updates
 - Neighborship comes up
-- Keepalives sent
+- Keeping the neighborship up
+- Sending routes
+- Receiving routes
+- IPv4 Unicast Address Family
+- Async via Tokio
 
 What isn't implemented yet:
 
-- Exchanging routes (Update messages)
-- Handling of multiple peers
+-  GUI
+-  Best Path Calc.
+-  Optional Parameters for neighbor.
+-  Processing of the following BGP messages: Notification
+-  Handling of route refresh
