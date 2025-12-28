@@ -39,8 +39,13 @@ pub struct GlobalSettings {
 }
 #[derive(Debug)]
 pub struct RouteChannel {
-    pub tx: mpsc::Sender<RouteV4>,
-    pub rx: mpsc::Receiver<RouteV4>,
+    pub tx: mpsc::Sender<ChannelMessage>,
+    pub rx: mpsc::Receiver<ChannelMessage>,
+}
+
+pub enum ChannelMessage {
+    Route(RouteV4),
+    NeighborDown,
 }
 #[derive(Debug)]
 pub struct BGPProcess {
@@ -231,8 +236,8 @@ impl BGPProcess {
                     } else {
                         PeerType::External
                     };
-                    let (tx_to_bgp, rx_from_neighbor)  = mpsc::channel::<RouteV4>(65535);
-                    let (tx_to_neighbor, rx_from_bgp) = mpsc::channel::<RouteV4>(65535);
+                    let (tx_to_bgp, rx_from_neighbor)  = mpsc::channel::<ChannelMessage>(65535);
+                    let (tx_to_neighbor, rx_from_bgp) = mpsc::channel::<ChannelMessage>(65535);
                     let neighbors_channels = RouteChannel {
                         rx: rx_from_neighbor,
                         tx: tx_to_neighbor,
