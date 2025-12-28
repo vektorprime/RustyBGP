@@ -77,7 +77,7 @@ impl TryFrom<String> for NLRI {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RouteV4 {
     // route_cast: RouteCast,
     // Maybe at some point I'll try handling multicast routes once. It's pretty rare to need BGP's multicast AF.

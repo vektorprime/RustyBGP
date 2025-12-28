@@ -29,7 +29,7 @@ async fn main()  {
     let mut bgp: Arc<Mutex<BGPProcess>> = Arc::new(Mutex::new(BGPProcess::new("bgp_config.toml".to_string())));
     println!("{:#?}", bgp);
     // todo read the IP and port from config file
-    BGPProcess::run(bgp, "10.0.0.3".to_string(), "179".to_string()).await;
+    BGPProcess::run_process_loop(bgp, "10.0.0.3".to_string(), "179".to_string()).await;
 
 }
 

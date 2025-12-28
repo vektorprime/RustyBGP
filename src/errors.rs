@@ -45,6 +45,7 @@ pub enum MessageError {
 #[derive(PartialEq, Debug)]
 pub enum EventError {
     UnhandledEvent,
+    ChannelDown
 }
 
 #[derive(PartialEq, Debug)]

@@ -21,7 +21,7 @@ use crate::finite_state_machine::events::Event;
 use crate::messages::{extract_messages_from_rec_data, parse_packet_type, BGPVersion, MessageType};
 use crate::messages::keepalive::{send_keepalive};
 use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, OpenMessage};
-use crate::process::{BGPProcess, GlobalSettings, RouteChannel};
+use crate::process::{BGPProcess, ChannelMessage, GlobalSettings, RouteChannel};
 
 #[derive(Debug)]
 pub enum IPType {
@@ -138,7 +138,7 @@ impl Neighbor {
 
     }
 
-    pub fn process_routes_from_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
+    pub async fn process_routes_from_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
 
         if let Some(nlri_coll) = update_message.nlri {
             let path_attributes = update_message.path_attributes.ok_or_else(|| MessageError::MissingPathAttributes)?;
@@ -207,8 +207,10 @@ impl Neighbor {
                 let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone());
                 println!("Adding Route {:#?} to adj_rib_in", rt);
                 //self.routes_v4.push(rt);
-                let route_vec = vec![rt];
+                let route_vec = vec![rt.clone()];
                 self.adj_rib_in.insert(nlri.clone(), route_vec);
+                // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
+                self.route_channel.send_route(rt).await;
             }
             Ok(())
         }
@@ -781,7 +783,9 @@ impl Neighbor {
                     Event::KeepAliveMsg => {
                         self.fsm.hold_timer.start(self.fsm.hold_time);
                         println!("Setting neighbor {:#?} state to Established", self.ip);
+                        // TODO Need to confirm that we will always receive a Keepalive on neighbor coming up even if holdtime is 0
                         self.fsm.state = State::Established;
+                        self.route_channel.bring_up().await?;
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
@@ -813,6 +817,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter = 0;
+                        self.route_channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -826,6 +831,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
+                        self.route_channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -838,6 +844,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
+                        self.route_channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -881,6 +888,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
+                        self.route_channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -890,6 +898,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter += 1;
+                        self.route_channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -899,6 +908,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter += 1;
+                        self.route_channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -912,7 +922,8 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::UpdateMsg(msg) => {
-                        self.process_routes_from_message(msg)?;
+                        // TODO filter routes or modify them in the adj_rib_in  here
+                        self.process_routes_from_message(msg).await?;
                         if self.fsm.hold_time > 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
                         }
@@ -929,6 +940,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
+                        self.route_channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -948,6 +960,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                         // TODO damp peer
                         }
+                       self.route_channel.take_down().await?;
                         self.fsm.state = State::Idle;
                        Ok(())
                    },
@@ -997,7 +1010,7 @@ impl Neighbor {
             return Err(NeighborError::PeerIPNotEstablished.into())
         }
         let update_message = extract_update_message(tsbuf)?;
-        self.process_routes_from_message(update_message)?;
+        self.process_routes_from_message(update_message).await?;
 
         Ok(())
     }
