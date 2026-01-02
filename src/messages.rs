@@ -153,27 +153,35 @@ pub fn locate_marker_in_message(tsbuf: &[u8], migrated_data_len: usize) -> Resul
     Ok(())
 }
 
-pub fn locate_markers_indexes_in_message(tsbuf: &[u8]) -> Result<(Vec<usize>), MessageError> {
-    // find all the Markers (16x 0xFF) and note their starting indexes in the vec
-    let mut markers_found = Vec::new();
-    let bytes_to_find: [u8; 16] = [ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
-    for (i, b) in tsbuf.iter().enumerate() {
-        if *b == 0xFF {
-            if i + 16 < tsbuf.len() {
-                if tsbuf[i..i + 16] == bytes_to_find {
-                    markers_found.push(i);
-                }
-            }
-
-        }
-    }
-    if markers_found.len() == 0 {
-        return Err(MessageError::NoMarkerFound)
-    }
-
-    Ok(markers_found)
-    //println!("Found marker in message");
-}
+// pub fn locate_markers_indexes_in_message(tsbuf: &[u8]) -> Result<(Vec<usize>), MessageError> {
+//     // find all the Markers (16x 0xFF) and note their starting indexes in the vec
+//     let mut markers_found = Vec::new();
+//     // can't init the last_found_idx to 0 or else the first iteration would fail
+//     let mut last_found_idx = 4096;
+//     let bytes_to_find: [u8; 16] = [ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+//     for (i, b) in tsbuf.iter().enumerate() {
+//         if *b == 0xFF  && i + 16 < tsbuf.len() {
+//             if tsbuf[i..i + 16] == bytes_to_find {
+//                 if i == last_found_idx + 1 {
+//                     // there's no way we have another marker again as we need at least 3 bytes between them
+//                     println!("skipping marker because there's a trailing 0xFF");
+//                     continue;
+//                 }
+//                 println!("Found marker in message at byte {}", i);
+//                 last_found_idx = i;
+//                 markers_found.push(i);
+//             }
+//
+//
+//         }
+//     }
+//     if markers_found.len() == 0 {
+//         return Err(MessageError::NoMarkerFound)
+//     }
+//
+//     Ok(markers_found)
+//     //println!("Found marker in message");
+// }
 
 pub fn extract_messages_from_rec_data(tsbuf: &[u8]) -> Result<Vec<Vec<u8>>, MessageError> {
     // multiple messages may be contained in one tcp stream
@@ -184,25 +192,46 @@ pub fn extract_messages_from_rec_data(tsbuf: &[u8]) -> Result<Vec<Vec<u8>>, Mess
     // get len and advance to next marker
 
     let mut messages: Vec<Vec<u8>> = Vec::new();
-    //println!("Total message size from TCP is: {}", data_len);
-    loop {
-        //locate_marker_in_message(tsbuf, migrated_data_len)?;
-        let markers_indexes = locate_markers_indexes_in_message(tsbuf)?;
-        for index in markers_indexes {
-            let message_len =  match tsbuf.get(index +16..index + 18) {
-                Some(bytes) => {
-                    u16::from_be_bytes(bytes.try_into().map_err(|_| MessageError::BadInt16Read)?)
-                },
-                None => { continue }
-            };
+    // println!("Total message size from TCP is: {}", data_len);
 
-            println!("Found message length: {}", message_len);
+    // I merged this function and locate_marker because I wasn't handling leading or trailing 0xFF correctly
+    // I needed to incorporate the message_len into the indexing of the tsbuf to properly traverse it
 
-            messages.push(Vec::from(&tsbuf[index..index + message_len as usize]));
+    let bytes_to_find: [u8; 16] = [ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+    let mut bytes_to_skip = 0;
+    for (i, b) in tsbuf.iter().enumerate() {
+        if bytes_to_skip > 0 {
+            bytes_to_skip -= 1;
+            continue;
         }
-        break;
-    }
+        // println!("i is {}", i);
+        if *b == 0xFF  && i + 16 < tsbuf.len() {
+            if tsbuf[i..i + 16] == bytes_to_find {
 
+                println!("Found marker in message at byte {}", i);
+                let message_len =  match tsbuf.get(i +16..i + 18) {
+                    Some(bytes) => {
+                        u16::from_be_bytes(bytes.try_into().map_err(|_| MessageError::BadInt16Read)?)
+                    },
+                    None => {
+                        println!("Unable to read message_len, skipping all messages in this TCP payload");
+                        return Err(MessageError::BadInt16Read)
+                    }
+                };
+                // println!("message_len is {}", message_len);
+                if message_len as usize + i > tsbuf.len() {
+                    return Err(MessageError::MessageLenTooBig);
+                }
+
+                messages.push(Vec::from(&tsbuf[i..i + message_len as usize]));
+                bytes_to_skip = message_len;
+                if i + message_len as usize >= tsbuf.len() {
+                    break;
+                }
+            }
+        }
+    }
+    
     Ok(messages)
 }
 

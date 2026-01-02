@@ -314,6 +314,7 @@ impl NextHop {
     pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
         NextHop {
             category: Category::WellKnownMandatory,
+            // TODO add error checking
             ipv4addr: Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]),
         }
     }
@@ -331,6 +332,7 @@ impl MultiExitDisc {
     pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
         MultiExitDisc {
             category: Category::OptionalNonTransitive,
+            // TODO handle unwrap and add error checking
             value: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
         }
     }
@@ -346,6 +348,7 @@ impl LocalPref {
     pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
         LocalPref {
             category: Category::WellKnownDiscretionary,
+            // TODO handle unwrap and add error checking
             value: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
         }
     }
@@ -353,16 +356,35 @@ impl LocalPref {
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct AtomicAggregate {
+    // the value in the length field meaningless and should always be 0
     category: Category,
-    value: u32, // 4 bytes
+    // value: u8, // 1 byte
 }
 
+impl AtomicAggregate {
+    pub fn new() -> Self {
+        AtomicAggregate {
+            category: Category::WellKnownDiscretionary
+        }
+    }
+}
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Aggregator {
     category: Category,
     as_num: AS, // 2 bytes or 4
     ipv4addr: Ipv4Addr
+}
+
+impl Aggregator {
+    pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
+        Aggregator {
+            category: Category::OptionalTransitive,
+            // TODO handle unwrap and add error checking
+            as_num: AS::AS4(u32::from_be_bytes(bytes[0..4].try_into().unwrap())),
+            ipv4addr: Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7]),
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -414,8 +436,11 @@ impl PAdata {
             TypeCode::LocalPref => {
                 PAdata::LocalPref(LocalPref::from_vec_u8(bytes))
             },
-            tc => {
-                panic!("Unimplemented patype code {:?}", tc);
+            TypeCode::AtomicAggregate => {
+                PAdata::AtomicAggregate(AtomicAggregate::new())
+            },
+            TypeCode::Aggregator => {
+                PAdata::Aggregator(Aggregator::from_vec_u8(bytes))
             }
         }
     }
@@ -590,7 +615,7 @@ impl PathAttribute {
                 pa_bytes.extend(lp.value.to_be_bytes());
             },
             PAdata::AtomicAggregate(atomic_agg) => {
-                pa_bytes.extend(atomic_agg.value.to_be_bytes());
+                // nothing needed here because there is nevera value, and the len field is always 0
             },
             PAdata::Aggregator(agg) => {
                 pa_bytes.extend(agg.ipv4addr.to_bits().to_be_bytes());
@@ -693,19 +718,25 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
     }
     //println!("message_len: {}", message_len);
     let withdrawn_route_len = extract_u16_from_bytes(tsbuf, 19, 21)?;
-    //println!("withdrawn route len is : {}", withdrawn_route_len);
+    if withdrawn_route_len > 0 {
+        println!("withdrawn route len is : {}", withdrawn_route_len);
+    }
+    
     let mut current_idx = 0;
     let base_idx = 21;
-    let route_size = 5;
-    let withdrawn_routes: Option<Vec<NLRI>> = if withdrawn_route_len >= route_size {
+    let route_and_len_size = 5;
+    let route_size = 4;
+
+    let withdrawn_routes: Option<Vec<NLRI>> = if withdrawn_route_len >= route_and_len_size {
         //println!("withdrawn_route_len is greater than or equal to route_size");
         let mut routes: Vec<NLRI> = Vec::new();
-        for x in 0.. (withdrawn_route_len / route_size) as usize {
-            current_idx = base_idx + (route_size as usize * x);
+        for x in 0.. (withdrawn_route_len / route_and_len_size) as usize {
+            current_idx = base_idx + (route_and_len_size as usize * x);
             //println!("current_idx {}", current_idx);
             let prefix_len = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
             //println!("prefix_len {}", prefix_len);
             current_idx += 1;
+            // if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
 
             let route_u32 = extract_u32_from_bytes(tsbuf, current_idx, current_idx + route_size as usize)?;
             //println!("route_u32 {}", route_u32);
@@ -731,7 +762,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
     //println!("total_path_attribute_len {}", total_path_attribute_len);
     current_idx += 2;
     //println!("current_idx {}", current_idx);
-
+    // if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
         // origin, aspath, next hop are the mandatory atts (24 total).
 
     // losing the order of the PAs shouldn't matter because we process each one into an object right after finding it, so an option of vec is fine
@@ -750,6 +781,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
             //println!("flags {:#?}", flags);
 
             current_idx += 1;
+            if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += 1;
             //println!("current_idx {}", current_idx);
 
@@ -760,11 +792,13 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
             //println!("type_code {:#?}", type_code);
 
             current_idx += 1;
+            if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += 1;
             //println!("current_idx {}", current_idx);
 
             let len = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
             current_idx += 1;
+            if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += 1;
             //println!("current_idx {}", current_idx);
 
@@ -781,6 +815,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
             //println!("data_bytes {:#?}", data_bytes);
 
             current_idx += len as usize;
+            if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += len as usize;
             //println!("current_idx {}", current_idx);
 
@@ -802,6 +837,13 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
         None
     };
 
+
+    if withdrawn_routes.is_some() && total_path_attribute_len == 0 {
+        let update_message = UpdateMessage::new(message_len, withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, None)?;
+        return Ok(update_message)
+    }
+
+
     if current_idx == message_len as usize {
         //println!("No NLRI in this message because current_idx == message_len");
         return Err(MessageError::MissingNLRI)
@@ -818,7 +860,9 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
 pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: &mut usize) -> Option<Vec<NLRI>> {
     let route_size: usize = 5;
     let mut nlri = Vec::new();
-    let nlri_count: usize = (message_len - *current_idx) / route_size;
+    // need to -1 below because we are already at the prefix len byte, if we didn't we'd end up with  4 bytes instead of 5
+    // e.g. the 61st byte is the prefix len but the prefix is 62-65
+    let nlri_count: usize = (message_len - (*current_idx - 1)) / route_size;
     //println!("message_len is  {:#?}", message_len);
     //println!("current_idx is  {:#?}", current_idx);
     //println!("nlri_count is  {:#?}", nlri_count);

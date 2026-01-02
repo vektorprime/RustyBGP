@@ -21,7 +21,7 @@ use crate::finite_state_machine::events::Event;
 use crate::messages::{extract_messages_from_rec_data, parse_packet_type, BGPVersion, MessageType};
 use crate::messages::keepalive::{send_keepalive};
 use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, OpenMessage};
-use crate::process::{BGPProcess, ChannelMessage, GlobalSettings, RouteChannel};
+use crate::process::{BGPProcess, ChannelMessage, GlobalSettings, NeighborChannel};
 
 #[derive(Debug)]
 pub enum IPType {
@@ -55,18 +55,18 @@ pub struct Neighbor {
     pub adj_rib_in: HashMap<NLRI, Vec<RouteV4>>,
     // TODO adj-rib-out filters routes before they are sent to neighbor, generate event to send update
     pub adj_rib_out: HashMap<NLRI, Vec<RouteV4>>,
-    pub route_channel: RouteChannel
+    pub channel: NeighborChannel,
+    //pub tcp_read_stream: Option<OwnedReadHalf>,
+    pub tcp_write_stream: Option<OwnedWriteHalf>,
 }
 
 
-pub async fn run_timer_loop(all_neighbors_arc: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, peer_ip: Ipv4Addr) {
+pub async fn run_timer_loop(neighbor_arc: Arc<Mutex<Neighbor>>, peer_ip: Ipv4Addr) {
     tokio::spawn( async move {
         loop {
             {
-                let mut all_neighbors = all_neighbors_arc.lock().await;
-                if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                    n.check_timers_and_generate_events().await;
-                }
+                let mut neighbor = neighbor_arc.lock().await;
+                neighbor.check_timers_and_generate_events().await;
             }
             // sleep outside of this so we don't hold a mutex
             sleep(Duration::from_secs(1)).await;
@@ -74,15 +74,13 @@ pub async fn run_timer_loop(all_neighbors_arc: Arc<Mutex<HashMap<Ipv4Addr, Neigh
     });
 }
 
-pub async fn run_event_loop(all_neighbors: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, mut tcp_stream: OwnedWriteHalf, peer_ip: Ipv4Addr) {
+pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>) {
     tokio::spawn( async move {
         loop {
-            let mut all_neighbors = all_neighbors.lock().await;
-            if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                while let Some(e) = n.events.pop_front() {
-                    if let Err(e) = n.handle_event(e, &mut tcp_stream).await {
-                        println!("Error: Unable to handle event {:#?}, skipping", e);
-                    }
+            let mut neighbor = neighbor_arc.lock().await;
+            while let Some(e) = neighbor.events.pop_front() {
+                if let Err(e) = neighbor.handle_event(e).await {
+                    println!("Error: Unable to handle event {:#?}, skipping", e);
                 }
             }
         }
@@ -107,7 +105,7 @@ impl Neighbor {
         Ok(())
     }
 
-    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: GlobalSettings, route_channel: RouteChannel) -> Result<Neighbor, MessageError> {
+    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: GlobalSettings, route_channel: NeighborChannel) -> Result<Neighbor, MessageError> {
         if keepalive_time_sec < 1 {
             return Err(MessageError::HelloTimeLessThanOne);
         }
@@ -133,9 +131,28 @@ impl Neighbor {
             events: VecDeque::new(),
             adj_rib_in: HashMap::new(),
             adj_rib_out: HashMap::new(),
-            route_channel
+            channel: route_channel,
+            //tcp_read_stream: None,
+            tcp_write_stream: None,
         })
+    }
 
+    pub async fn withdraw_routes_from_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
+
+        if let Some(withdrawn_routes) = update_message.withdrawn_routes {
+            for nlri in &withdrawn_routes {
+                println!("Withdrawing route {:#?} from adj_rib_in", nlri);
+                self.adj_rib_in.remove(nlri);
+                // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
+            }
+            
+            self.channel.withdraw_route(withdrawn_routes).await;
+            
+            Ok(())
+        }
+        else {
+            Err(MessageError::MissingWithdrawnRoutes)
+        }
     }
 
     pub async fn process_routes_from_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
@@ -210,7 +227,7 @@ impl Neighbor {
                 let route_vec = vec![rt.clone()];
                 self.adj_rib_in.insert(nlri.clone(), route_vec);
                 // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
-                self.route_channel.send_route(rt).await;
+                self.channel.send_route(rt).await;
             }
             Ok(())
         }
@@ -219,7 +236,7 @@ impl Neighbor {
         }
     }
 
-    pub async fn handle_event(&mut self, event: Event, tcp_stream: &mut OwnedWriteHalf) -> Result<(), BGPError> {
+    pub async fn handle_event(&mut self, event: Event) -> Result<(), BGPError> {
         // TODO move the tcp_stream into the neighbor probably in between bgp.run and neighbor.run
         match self.fsm.state {
             State::Idle => {
@@ -416,6 +433,7 @@ impl Neighbor {
             },
             State::Active => {
                 // listening or trying for new TCP connections
+
                 match event {
                     Event::ManualStop => {
                         if self.fsm.delay_open_timer.is_running()? && self.fsm.send_notification_without_open {
@@ -468,7 +486,15 @@ impl Neighbor {
                         else {
                             self.fsm.connect_retry_timer.stop();
                             let open_message = OpenMessage::new(self.global_settings.version, self.global_settings.my_as, self.fsm.hold_time, self.global_settings.identifier, 0, None)?;
-                            send_open(tcp_stream, open_message).await?;
+                            match self.tcp_write_stream.as_mut() {
+                                Some(tcp_write_stream) => {
+                                    send_open(tcp_write_stream, open_message).await?;
+                                },
+                                None => {
+                                    println!("Unable to use Neighbor's tcp_write_stream");
+                                }
+                            }
+
                             if self.fsm.hold_time < 240 {
                                 self.fsm.hold_timer.start(240);
                             }
@@ -609,7 +635,14 @@ impl Neighbor {
                     Event::OpenMsg(msg) => {
                         self.fsm.delay_open_timer.stop();
                         self.fsm.connect_retry_timer.stop();
-                        send_keepalive(tcp_stream).await?;
+                        match self.tcp_write_stream.as_mut() {
+                            Some(tcp_write_stream) => {
+                                send_keepalive(tcp_write_stream).await?;
+                            },
+                            None => {
+                                println!("Unable to use Neighbor's tcp_write_stream");
+                            }
+                        }
                         // TODO process Open (anything left?)
                         if msg.hold_time < self.fsm.hold_time {
                             self.fsm.hold_time = msg.hold_time;
@@ -785,7 +818,7 @@ impl Neighbor {
                         println!("Setting neighbor {:#?} state to Established", self.ip);
                         // TODO Need to confirm that we will always receive a Keepalive on neighbor coming up even if holdtime is 0
                         self.fsm.state = State::Established;
-                        self.route_channel.bring_up().await?;
+                        self.channel.bring_up().await?;
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
@@ -817,7 +850,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter = 0;
-                        self.route_channel.take_down().await?;
+                        self.channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -831,7 +864,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
-                        self.route_channel.take_down().await?;
+                        self.channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -844,12 +877,19 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
-                        self.route_channel.take_down().await?;
+                        self.channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
                     Event::KeepaliveTimerExpires => {
-                        send_keepalive(tcp_stream).await?;
+                        match self.tcp_write_stream.as_mut() {
+                            Some(tcp_write_stream) => {
+                                send_keepalive(tcp_write_stream).await?;
+                            },
+                            None => {
+                                println!("Unable to use Neighbor's tcp_write_stream");
+                            }
+                        }
                         if self.fsm.hold_time > 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
                         } else {
@@ -888,7 +928,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
-                        self.route_channel.take_down().await?;
+                        self.channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -898,7 +938,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter += 1;
-                        self.route_channel.take_down().await?;
+                        self.channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -908,7 +948,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter += 1;
-                        self.route_channel.take_down().await?;
+                        self.channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -923,7 +963,17 @@ impl Neighbor {
                     },
                     Event::UpdateMsg(msg) => {
                         // TODO filter routes or modify them in the adj_rib_in  here
-                        self.process_routes_from_message(msg).await?;
+                        // TODO handle withdrawn routes here too
+                        if msg.nlri.is_none() && msg.withdrawn_routes.is_some() {
+                            self.withdraw_routes_from_message(msg).await?
+                        }
+                        else if msg.nlri.is_some() {
+                            self.process_routes_from_message(msg).await?;
+                        }
+                        else {
+                            println!("WARNING: msg.nlri and msg.withdrawn_routes are both None in Event::UpdateMsg, likely a parsing issue or fuzzing");
+                        }
+
                         if self.fsm.hold_time > 0 {
                             self.fsm.keepalive_timer.start(self.fsm.keepalive_time);
                         }
@@ -940,7 +990,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
-                        self.route_channel.take_down().await?;
+                        self.channel.take_down().await?;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
@@ -960,7 +1010,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                         // TODO damp peer
                         }
-                       self.route_channel.take_down().await?;
+                       self.channel.take_down().await?;
                         self.fsm.state = State::Idle;
                        Ok(())
                    },
@@ -1111,8 +1161,19 @@ impl Neighbor {
     }
 }
 
+pub async fn reestablish_neighbor_streams(neighbor_arc: &Arc<Mutex<Neighbor>>, tcp_read_stream: &mut OwnedReadHalf) -> Option<OwnedReadHalf> {
+    let mut neighbor = neighbor_arc.lock().await;
+    if !neighbor.channel.is_active {
+        if let Some(new_tcp_stream) = neighbor.channel.recv_tcp_conn_from_bgp_proc() {
+            let (tcp_r_stream, mut tcp_wr_stream) = new_tcp_stream.into_split();
+            neighbor.tcp_write_stream = Some(tcp_wr_stream);
+           return Some(tcp_r_stream)
+        }
+    }
+    None
+}
 
-pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BGPProcess>>, all_neighbors: Arc<Mutex<HashMap<Ipv4Addr, Neighbor>>>, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
+pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, mut neighbor: Neighbor, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
 
     // max bgp msg size should never exceed 4096
@@ -1122,30 +1183,38 @@ pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BG
 
 
     let (mut tcp_read_stream, mut tcp_write_stream) = tcp_stream.into_split();
+
+    // we only store the write half of the stream in the neighbor, not the read half. This is done to prevent locking the neighbor.
+    neighbor.tcp_write_stream = Some(tcp_write_stream);
+    let neighbor_arc = Arc::new(Mutex::new(neighbor));
     // generates time events
-    run_timer_loop(Arc::clone(&all_neighbors), peer_ip).await;
+    run_timer_loop(Arc::clone(&neighbor_arc), peer_ip).await;
     // poops and handles events
-    run_event_loop(Arc::clone(&all_neighbors), tcp_write_stream, peer_ip).await;
+    run_event_loop(Arc::clone(&neighbor_arc)).await;
 
 
-
-    let all_neighbors_event_gen_arc = Arc::clone(&all_neighbors);
     loop {
+
+        // the write half is moved inside the func, whereas the read half happens outside
+        if let Some(new_tcp_read_stream) = reestablish_neighbor_streams(&neighbor_arc, &mut tcp_read_stream).await {
+            tcp_read_stream = new_tcp_read_stream;
+        }
+
         tsbuf.clear();
         // TODO move the TCP stream to its own task, and also create a message queue handler similar to our event handler
         // The above will allow us to not block the event handler
         // I could also use message passing
         // Also will look into Arc Mutex for the TCP stream as that would be really simple.
         // I don't want to go Arc Mutex crazy because we'll just end up locking a lot.
+
         tcp_read_stream.readable().await.unwrap();
+
 
         match tcp_read_stream.try_read_buf(&mut tsbuf) {
             Ok(0) => {
                 {
-                    let mut all_neighbors = all_neighbors_event_gen_arc.lock().await;
-                    if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                        n.generate_event(Event::TcpConnectionFails);
-                    }
+                    let mut neighbor = neighbor_arc.lock().await;
+                    neighbor.generate_event(Event::TcpConnectionFails);
                 }
             },
             Ok(size) => {
@@ -1164,17 +1233,10 @@ pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BG
                     Ok(messages) => {
                         for m in &messages {
                             {
-                                //let mut bgp = bgp_proc.lock().await;
-                                let mut all_neighbors = all_neighbors.lock().await;
-                                if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                                    // if let Err(e) =  n.route_incoming_message_to_handler(&mut tcp_stream, m, &mut *bgp).await {
-                                    //     println!("Error handling message: {:#?}", e);
-                                    // }
-                                   if let Err(e) =  parse_packet_type(m).and_then(|mt| n.generate_event_from_message(&tsbuf, mt)) {
-                                       println!("Error: {:#?}, skipping message", e);
-                                   }
+                                let mut neighbor = neighbor_arc.lock().await;
+                                if let Err(e) =  parse_packet_type(m).and_then(|mt| neighbor.generate_event_from_message(&tsbuf, mt)) {
+                                    println!("Error: {:#?}, skipping message", e);
                                 }
-
                             }
                         }
                     },
@@ -1191,11 +1253,9 @@ pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, bgp_proc: Arc<Mutex<BG
                     println!("Error : Unable to use TCP Stream -  {:#?}", e);
                     //return Err(NeighborError::TCPConnDied.into());
                     {
-                        let mut all_neighbors = all_neighbors.lock().await;
-                        if let Some(n) = all_neighbors.get_mut(&peer_ip) {
-                            n.generate_event(Event::TcpConnectionFails);
+                        let mut neighbor = neighbor_arc.lock().await;
+                        neighbor.generate_event(Event::TcpConnectionFails);
 
-                        }
                     }
                 }
             }

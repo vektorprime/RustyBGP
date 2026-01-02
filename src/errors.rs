@@ -40,6 +40,9 @@ pub enum MessageError {
     HelloTimeLessThanOne,
     HoldTimeLessThanThreeAndNotZero,
     BadAttributeTypeCode,
+    UpdateMessageLenAndIdxMismatch,
+    MissingWithdrawnRoutes,
+    MessageLenTooBig,
 }
 
 #[derive(PartialEq, Debug)]
