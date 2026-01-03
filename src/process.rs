@@ -297,12 +297,12 @@ impl BGPProcess {
                     let neighbors_channels = NeighborChannel {
                         rx: rx_from_neighbor,
                         tx: tx_to_neighbor,
-                        is_active: false
+                        is_active: true
                     };
                     let bgp_channel = NeighborChannel {
                         rx: rx_from_bgp,
                         tx: tx_to_bgp,
-                        is_active: false,
+                        is_active: true,
                     };
                     // need to use a temp HashMap because we already borrowed bgp_proc as mutable
                     {

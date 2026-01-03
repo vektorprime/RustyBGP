@@ -861,7 +861,7 @@ impl Neighbor {
                         // TODO Need to confirm that we will always receive a Keepalive on neighbor coming up even if holdtime is 0
                         self.fsm.state = State::Established;
                         println!("Moving to {:#?}", self.fsm.state);
-                        self.channel.bring_up().await?;
+                        //self.channel.bring_up().await?;
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
@@ -894,7 +894,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter = 0;
-                        self.channel.take_down().await?;
+                        // self.channel.take_down().await?;
                         self.fsm.keepalive_timer.stop();
                         self.fsm.hold_timer.stop();
                         self.fsm.state = State::Idle;
@@ -911,7 +911,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
-                        self.channel.take_down().await?;
+                        // self.channel.take_down().await?;
                         self.fsm.keepalive_timer.stop();
                         self.fsm.hold_timer.stop();
                         self.fsm.state = State::Idle;
@@ -927,7 +927,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
-                        self.channel.take_down().await?;
+                        // self.channel.take_down().await?;
                         self.fsm.keepalive_timer.stop();
                         self.fsm.hold_timer.stop();
                         self.fsm.state = State::Idle;
@@ -981,7 +981,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
-                        self.channel.take_down().await?;
+                        // self.channel.take_down().await?;
                         self.fsm.keepalive_timer.stop();
                         self.fsm.hold_timer.stop();
                         self.fsm.state = State::Idle;
@@ -994,7 +994,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter += 1;
-                        self.channel.take_down().await?;
+                        // self.channel.take_down().await?;
                         self.fsm.keepalive_timer.stop();
                         self.fsm.hold_timer.stop();
                         self.fsm.state = State::Idle;
@@ -1007,7 +1007,7 @@ impl Neighbor {
                         // TODO release BGP res.
                         // TODO drop TCP conn
                         self.fsm.connect_retry_counter += 1;
-                        self.channel.take_down().await?;
+                        // self.channel.take_down().await?;
                         if !self.fsm.passive_tcp_establishment {
                             self.fsm.idle_hold_timer.start(self.fsm.idle_hold_time);
                         }
@@ -1055,7 +1055,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
                         }
-                        self.channel.take_down().await?;
+                        // self.channel.take_down().await?;
                         self.fsm.keepalive_timer.stop();
                         self.fsm.hold_timer.stop();
                         self.fsm.state = State::Idle;
@@ -1078,7 +1078,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                         // TODO damp peer
                         }
-                       self.channel.take_down().await?;
+                       // self.channel.take_down().await?;
                        self.fsm.keepalive_timer.stop();
                        self.fsm.hold_timer.stop();
                         self.fsm.state = State::Idle;
@@ -1266,11 +1266,13 @@ pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, mut neighbor: Neighbor
 
 
     loop {
-
         // the write half is moved inside the func, whereas the read half is returned here and move it into the correct var
         if let Some(new_tcp_read_stream) = reestablish_neighbor_streams(&neighbor_arc).await {
             tcp_read_stream = new_tcp_read_stream;
+            let mut neighbor = neighbor_arc.lock().await;
+            neighbor.generate_event(Event::TcpCRAcked);
         }
+
 
         tsbuf.clear();
         // TODO move the TCP stream to its own task, and also create a message queue handler similar to our event handler
