@@ -45,6 +45,10 @@ pub struct NeighborChannel {
     pub is_active: bool,
 }
 
+
+pub enum TCPChannelMessage {
+    DropTCP
+}
 pub enum ChannelMessage {
     Route(RouteV4),
     WithdrawRoute(Vec<NLRI>),
@@ -79,7 +83,7 @@ impl NeighborChannel {
     }
 
     pub fn recv_tcp_conn_from_bgp_proc(&mut self) -> Option<TcpStream> {
-        println!("executing recv_tcp_conn_from_bgp_proc");
+        //println!("executing recv_tcp_conn_from_bgp_proc");
         if let Ok(ChannelMessage::TcpEstablished(tcp_stream)) = self.rx.try_recv() {
             return Some(tcp_stream)
         }
@@ -87,7 +91,7 @@ impl NeighborChannel {
     }
 
     pub fn send_tcp_conn_to_neighbor(&self, tcp_stream: TcpStream) -> Result<(), EventError> {
-        println!("executing send_tcp_conn_to_neighbor");
+        //println!("executing send_tcp_conn_to_neighbor");
         self.tx.try_send(ChannelMessage::TcpEstablished(tcp_stream)).map_err(|_| EventError::ChannelDown)
     }
 }
