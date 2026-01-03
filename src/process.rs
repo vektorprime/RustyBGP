@@ -79,10 +79,16 @@ impl NeighborChannel {
     }
 
     pub fn recv_tcp_conn_from_bgp_proc(&mut self) -> Option<TcpStream> {
+        println!("executing recv_tcp_conn_from_bgp_proc");
         if let Ok(ChannelMessage::TcpEstablished(tcp_stream)) = self.rx.try_recv() {
-           return Some(tcp_stream)
+            return Some(tcp_stream)
         }
         None
+    }
+
+    pub fn send_tcp_conn_to_neighbor(&self, tcp_stream: TcpStream) -> Result<(), EventError> {
+        println!("executing send_tcp_conn_to_neighbor");
+        self.tx.try_send(ChannelMessage::TcpEstablished(tcp_stream)).map_err(|_| EventError::ChannelDown)
     }
 }
 
@@ -205,9 +211,10 @@ impl BGPProcess {
     pub async fn run_process_loop(bgp_proc: Arc<Mutex<BGPProcess>>, address: String, port: String) {
         // init
         let mut all_neighbors_channels: HashMap<Ipv4Addr, NeighborChannel> = HashMap::new();
-        all_neighbors_channels.reserve(10);
-        let mut all_neighbors = BGPProcess::populate_neighbors_from_config(&bgp_proc, &mut all_neighbors_channels).await;
-        BGPProcess::run_message_channel_loop(Arc::clone(&bgp_proc), all_neighbors_channels).await;
+        let mut all_neighbors_channels_arc = Arc::new(Mutex::new(all_neighbors_channels));
+
+        let mut all_neighbors = BGPProcess::populate_neighbors_from_config(&bgp_proc, &all_neighbors_channels_arc).await;
+        BGPProcess::run_message_channel_loop(Arc::clone(&bgp_proc), Arc::clone(&all_neighbors_channels_arc)).await;
         BGPProcess::generate_event_for_all_neighbors(&mut all_neighbors, Event::AutomaticStartWithPassiveTcpEstablishment).await;
         //
 
@@ -233,19 +240,31 @@ impl BGPProcess {
                             continue;
                         }
                     }
-                    
+
                     //let all_neighbors_arc = Arc::clone(&all_neighbors);
                     let mut neighbor = match all_neighbors.remove(&peer_ip) {
                         Some(n) => n,
                         None => {
-                            println!("Unable to get neighbor object from all_neighbors");
+                            // TODO split the first connection vs resuming/passing a new connection to neighbor into two different funcs
+                            println!("Unable to get neighbor object from all_neighbors, which means the neighbor loop is already running");
+                            {
+                                let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
+                                println!("unlocked all_neighbors_channels_arc");
+                                if let Some(neighbor_channel) =  all_neighbors_channels.get_mut(&peer_ip) {
+                                    println!("Got Some(neighbor_channel)");
+                                    if let Err(e) = neighbor_channel.send_tcp_conn_to_neighbor(tcp_stream) {
+                                        println!("ERROR: Unable to send TCP connection in channel - {:#?}", e);
+                                    }
+                                }
+                            }
                             continue;
                         }
                     };
-
+                    println!("Extracted neighbor from hashmap");
                     neighbor.generate_event(Event::TcpCRAcked);
-
+                    println!("Generated Event::TcpCRAcked");
                     tokio::spawn(async move {
+                        println!("Moving neighbor to async task and executing run_neighbor_loop");
                         // get the neighbor and pass the tcp conn
                         if let Err(e) = neighbors::run_neighbor_loop(tcp_stream, neighbor, peer_ip).await {
                             println!("Error: Unable to continue run() for neighbor {:#?} - {:#?}", peer_ip, e);
@@ -259,7 +278,7 @@ impl BGPProcess {
         }
     }
 
-    pub async fn populate_neighbors_from_config(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels: &mut HashMap<Ipv4Addr, NeighborChannel>) -> HashMap<Ipv4Addr, Neighbor> {
+    pub async fn populate_neighbors_from_config(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels_arc: &Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>) -> HashMap<Ipv4Addr, Neighbor> {
         let mut bgp_proc = bgp_proc_arc.lock().await;
         let mut all_neighbors = HashMap::new();
         all_neighbors.reserve(10);
@@ -286,7 +305,11 @@ impl BGPProcess {
                         is_active: false,
                     };
                     // need to use a temp HashMap because we already borrowed bgp_proc as mutable
-                    all_neighbors_channels.insert(ip, neighbors_channels);
+                    {
+                        let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
+                        all_neighbors_channels.insert(ip, neighbors_channels);
+                    }
+
                     match Neighbor::new(ip, AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings, bgp_channel) {
                         Ok(neighbor) => {
                             all_neighbors.insert(ip, neighbor);
@@ -317,12 +340,15 @@ impl BGPProcess {
         }
     }
 
-    pub async fn run_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels: HashMap<Ipv4Addr, NeighborChannel>) {
+
+
+    pub async fn run_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>) {
         tokio::spawn( async move {
             loop {
+                let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
                 // TODO check the channel and unlock the bgp Arc Mutex if we need to modify the loc_rib
-                for (neighbor_ip, route_channel) in &mut all_neighbors_channels {
-                    while let Some(msg) = route_channel.rx.recv().await {
+                for (neighbor_ip, route_channel) in &mut *all_neighbors_channels {
+                    while let Ok(msg) = route_channel.rx.try_recv() {
                         match msg {
                             ChannelMessage::Route(route) => {
                                 // TODO handle route here so that we go calc. best path and add it to the loc_rib
