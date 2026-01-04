@@ -1,6 +1,8 @@
 [process_config]
 my_as = 2
 router_id = "1.1.1.1"
+next_hop_ip = "10.0.0.1"
+default_local_preference = 100
 
 [[net_advertisements_config]]
 prefix = "1.1.1.1/32"

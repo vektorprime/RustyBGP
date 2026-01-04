@@ -9,6 +9,7 @@ use crate::errors::{NeighborError, ProcessError};
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
+use crate::messages::update::PAdata::*;
 use crate::neighbors::Neighbor;
 use crate::routes::*;
 use crate::utils::{extract_u16_from_bytes, extract_u32_from_bytes, extract_u8_from_byte};
@@ -164,6 +165,14 @@ pub struct Origin {
 }
 
 impl Origin {
+
+    pub fn new(origin_type: OriginType) -> Self {
+        Origin {
+            category: Category::WellKnownMandatory,
+            origin_type
+        }
+    }
+
     pub fn from_u8(val: u8) -> Self {
         let origin_type = match val {
             0 => OriginType::IGP,
@@ -237,8 +246,8 @@ impl AS {
 
 #[derive(PartialEq, Debug, Clone)]
 pub struct AsPath {
-    category: Category,
-    as_path_segment: AsPathSegment
+    pub category: Category,
+    pub as_path_segment: AsPathSegment
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -250,6 +259,14 @@ pub struct AsPathSegment {
 }
 
 impl AsPath {
+
+    pub fn new(as_path_segment: AsPathSegment) -> Self {
+            AsPath {
+                category: Category::WellKnownMandatory,
+                as_path_segment,
+            }
+    }
+
     pub fn to_u8_vec(&self) -> Result<Vec<u8>, ProcessError> {
         let mut bytes = Vec::new();
 
@@ -311,6 +328,14 @@ pub struct NextHop {
 }
 
 impl NextHop {
+
+    pub fn new(ipv4addr: Ipv4Addr) -> Self {
+     NextHop {
+         category: Category::WellKnownMandatory,
+         ipv4addr
+     }
+    }
+
     pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
         NextHop {
             category: Category::WellKnownMandatory,
@@ -345,6 +370,12 @@ pub struct LocalPref {
 }
 
 impl LocalPref {
+    pub fn new(value: u32) -> Self {
+        LocalPref {
+            category: Category::WellKnownDiscretionary,
+            value
+        }
+    }
     pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
         LocalPref {
             category: Category::WellKnownDiscretionary,
@@ -451,28 +482,46 @@ pub struct PathAttribute {
     pub flags: Flags,
     pub type_code: TypeCode,
     pub len: u8,
-    pub data: PAdata
+    pub data: PAdata,
+    pub pa_data_len: u16
 }
 
 impl PathAttribute {
     pub fn new(flags: Flags, type_code: TypeCode, len: u8, data: PAdata) -> Self {
+
+        let pa_data_len: u16 = match &data {
+            Origin(_) => 4,
+            AsPath(as_path) => 3 + as_path.as_path_segment.number_of_as as u16 * 4 ,
+            NextHop(_) => 7,
+            MultiExitDisc(_) => 7,
+            AtomicAggregate(_) => 3,
+            Aggregator(_) => 11,
+            _ => {
+                // TODO validate that med, atomicagg, agg are correct
+                panic!("Unhandled PA DATA LEN in PathAttribute::new()");
+            }
+        };
+
         PathAttribute {
             flags,
             type_code,
             len,
-            data
+            data,
+            pa_data_len,
         }
     }
 
 
     // TODO add arguments here after testing is finished
-    pub fn new_next_hop(nhp_ip: Ipv4Addr) -> Self {
+    pub fn new_next_hop_from_ipv4(nhp_ip: Ipv4Addr) -> Self {
         let mut flags = Flags::new();
         flags.transitive = Flag::Transitive(true);
 
         // TODO when we add in IPv6 this needs to be a match
         let len = 4;
 
+        // TODO we need to account for the length changing based on ipv4 vs ipv6
+        let pa_data_len = 7;
 
         let next_hop = NextHop {
             category: Category::WellKnownMandatory,
@@ -486,27 +535,50 @@ impl PathAttribute {
             type_code: TypeCode::NextHop,
             len,
             data,
+            pa_data_len,
+        }
+    }
+
+    pub fn new_next_hop(next_hop: NextHop) -> Self {
+        let mut flags = Flags::new();
+        flags.transitive = Flag::Transitive(true);
+
+        let len = 4;
+
+        // TODO we need to account for the length changing based on ipv4 vs ipv6
+        let pa_data_len = 7;
+
+        let data = PAdata::NextHop(next_hop);
+
+        PathAttribute {
+            flags,
+            type_code: TypeCode::NextHop,
+            len,
+            data,
+            pa_data_len,
         }
     }
 
 
-
     // TODO add arguments here after testing is finished
-    pub fn new_as_path(as_list_vec: Vec<u32>) -> Self {
+    pub fn new_as_path_from_as_list(as_list_vec: Vec<u32>) -> Self {
         let mut flags = Flags::new();
         flags.transitive = Flag::Transitive(true);
 
         // TODO replace len after testing is finished
         let len = 2 + as_list_vec.len() as u8 * 4;
+        let pa_data_len = 5 + as_list_vec.len() as u16 * 4;
 
         let mut as_list = Vec::new();
-        for as_num in as_list_vec {
-            as_list.push(AS::AS4(as_num));
+        for as_num in &as_list_vec {
+            as_list.push(AS::AS4(*as_num));
         }
+
+        let number_of_as = as_list_vec.len() as u8;
 
         let as_path_segment = AsPathSegment {
             segment_type: AsPathSegmentType::AsSequence,
-            number_of_as: 1,
+            number_of_as,
             as_list,
         };
 
@@ -522,18 +594,54 @@ impl PathAttribute {
             type_code: TypeCode::AsPath,
             len,
             data,
+            pa_data_len,
         }
     }
 
+    pub fn new_as_path(as_path: AsPath) -> Self {
+        let mut flags = Flags::new();
+        flags.transitive = Flag::Transitive(true);
 
-    pub fn new_origin(origin_type: OriginType) -> Self {
+        // TODO replace len after testing is finished
+        // flag 1, type 1, len, seg type 1, seg len 1, as list variable
+        let len = 2 +as_path.as_path_segment.number_of_as * 4;
+        let pa_data_len = 5 + as_path.as_path_segment.number_of_as as u16 * 4;
+        let data = PAdata::AsPath(as_path);
+
+        PathAttribute {
+            flags,
+            type_code: TypeCode::AsPath,
+            len,
+            data,
+            pa_data_len,
+        }
+    }
+
+    pub fn new_origin(origin: Origin) -> Self {
+        let mut flags = Flags::new();
+        flags.transitive = Flag::Transitive(true);
+
+        let len = 1;
+        let pa_data_len = 4;
+
+        let data = PAdata::Origin(origin);
+        PathAttribute {
+            flags,
+            type_code: TypeCode::Origin,
+            len,
+            data,
+            pa_data_len,
+        }
+    }
+
+    pub fn new_origin_from_type(origin_type: OriginType) -> Self {
 
         let mut flags = Flags::new();
         flags.transitive = Flag::Transitive(true);
 
         // origin len here is always 1
         let len = 1;
-
+        let pa_data_len = 4;
         let category = Category::WellKnownMandatory;
 
         match origin_type {
@@ -548,6 +656,7 @@ impl PathAttribute {
                     type_code: TypeCode::Origin,
                     len,
                     data,
+                    pa_data_len,
                 }
             },
             OriginType::EGP => {
@@ -561,6 +670,7 @@ impl PathAttribute {
                     type_code: TypeCode::Origin,
                     len,
                     data,
+                    pa_data_len,
                 }
             },
             OriginType::Incomplete => {
@@ -574,6 +684,7 @@ impl PathAttribute {
                     type_code: TypeCode::Origin,
                     len,
                     data,
+                    pa_data_len,
                 }
             }
         }
@@ -839,7 +950,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
 
 
     if withdrawn_routes.is_some() && total_path_attribute_len == 0 {
-        let update_message = UpdateMessage::new(message_len, withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, None)?;
+        let update_message = UpdateMessage::new(Some(message_len), withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, None)?;
         return Ok(update_message)
     }
 
@@ -851,7 +962,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageE
 
     let nlri = extract_nlri_from_update_message(tsbuf, message_len as usize, &mut current_idx);
     // TODO read and process the optional params
-    let update_message = UpdateMessage::new(message_len, withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, nlri)?;
+    let update_message = UpdateMessage::new(Some(message_len), withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, nlri)?;
 
     Ok(update_message)
 
@@ -908,8 +1019,9 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
 }
 
 impl UpdateMessage {
-    pub fn new(message_len: u16, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, nlri: Option<Vec<NLRI>> ) -> Result<Self, MessageError> {
-        let message_header = MessageHeader::new(MessageType::Update, Some(message_len))?;
+    pub fn new(message_len: Option<u16>, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, nlri: Option<Vec<NLRI>> ) -> Result<Self, MessageError> {
+        // we calculate the message_len when we send with convert_to_bytes, we probably still need it for received messages
+        let message_header = MessageHeader::new(MessageType::Update, message_len)?;
 
         Ok(UpdateMessage {
             message_header,

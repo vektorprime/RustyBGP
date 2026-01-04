@@ -66,7 +66,8 @@ pub enum Event {
     KeepAliveMsg,
     UpdateMsg(UpdateMessage),
     RouteRefreshMsg(RouteRefreshMessage), // custom event I added to handle the message type
-    UpdateMsgErr
+    UpdateMsgErr,
+    SendUpdateMsg
 
 
 }

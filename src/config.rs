@@ -25,7 +25,9 @@ pub struct Config {
 #[derive(Debug, Deserialize)]
 pub struct ProcessConfig {
     pub my_as: u16,
-    pub router_id: String
+    pub router_id: String,
+    pub next_hop_ip: String,
+    pub default_local_preference: u32
 }
 
 

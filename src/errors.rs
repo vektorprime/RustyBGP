@@ -4,14 +4,15 @@ use crate::errors::BGPError::Message;
 pub enum NeighborError {
     KeepaliveGreaterThanHoldTime,
     KeepaliveEqualToHoldTime,
-    PeerIPNotRecognized,
+    NeighborIPNotRecognized,
     NeighborIsIPV6,
     ConfiguredNeighborsEmpty,
-    PeerIPNotEstablished,
+    NeighborIPNotEstablished,
     NeighborAlreadyEstablished,
     UnableToRemoveNeighbor,
     ConfiguredNeighborNotFound,
     TCPConnDied,
+    ASNumMismatch
 }
 
 #[derive(PartialEq, Debug)]

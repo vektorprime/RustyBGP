@@ -22,16 +22,16 @@ use crate::finite_state_machine::events::Event;
 
 use crate::messages::{extract_messages_from_rec_data, parse_packet_type, BGPVersion, MessageType};
 use crate::messages::keepalive::{send_keepalive};
-use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, OpenMessage};
-use crate::process::{BGPProcess, ChannelMessage, GlobalSettings, NeighborChannel, TCPChannelMessage};
-
+use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, send_update, OpenMessage};
+use crate::process::{BGPProcess, GlobalSettings };
+use crate::channels::*;
 #[derive(Debug)]
 pub enum IPType {
     V4,
     V6
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PeerType {
     Internal,
     External
@@ -54,9 +54,9 @@ pub struct Neighbor {
     pub global_settings: GlobalSettings,
     pub events: VecDeque<Event>,
     // TODO adj-rib-in filters routes coming in, then generates events to loc-rib with the route, trigger best path calc here
-    pub adj_rib_in: HashMap<NLRI, Vec<RouteV4>>,
+    pub adj_rib_in: HashMap<NLRI, RouteV4>,
     // TODO adj-rib-out filters routes before they are sent to neighbor, generate event to send update
-    pub adj_rib_out: HashMap<NLRI, Vec<RouteV4>>,
+    pub adj_rib_out: HashMap<NLRI, RouteV4>,
     pub channel: NeighborChannel,
     //pub tcp_read_stream: Option<OwnedReadHalf>,
     pub tcp_write_stream: Option<OwnedWriteHalf>,
@@ -76,12 +76,12 @@ pub async fn run_timer_loop(neighbor_arc: Arc<Mutex<Neighbor>>, peer_ip: Ipv4Add
     });
 }
 
-pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, oneshot_tx: mpsc::Sender<TCPChannelMessage>) {
+pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, tcp_channel_tx: mpsc::Sender<TCPChannelMessage>) {
     tokio::spawn( async move {
         loop {
             let mut neighbor = neighbor_arc.lock().await;
             while let Some(event) = neighbor.events.pop_front() {
-                if let Err(e) = neighbor.handle_event(event, &oneshot_tx).await {
+                if let Err(e) = neighbor.handle_event(event, &tcp_channel_tx).await {
                     println!("Error: Unable to handle event {:#?}, skipping", e);
                 }
             }
@@ -226,8 +226,7 @@ impl Neighbor {
                 let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone());
                 println!("Adding Route {:#?} to adj_rib_in", rt);
                 //self.routes_v4.push(rt);
-                let route_vec = vec![rt.clone()];
-                self.adj_rib_in.insert(nlri.clone(), route_vec);
+                self.adj_rib_in.insert(nlri.clone(), rt.clone());
                 // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
                 self.channel.send_route(rt).await;
             }
@@ -304,14 +303,14 @@ impl Neighbor {
                     Event::ManualStop => {
                         self.fsm.connect_retry_counter = 0;
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.state = State::Idle;
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires => {
                         self.fsm.connect_retry_timer.start(self.fsm.connect_retry_time);
                         self.fsm.delay_open_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         // TODO continue to listen for connection or try to connect to peer
                         // stay in Connect
                         Ok(())
@@ -333,7 +332,7 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::TcpCRInvalid => {
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         Ok(())
                     },
                     Event::TcpCRAcked | Event::TcpConnectionConfirmed => {
@@ -373,7 +372,7 @@ impl Neighbor {
                         }
                         else {
                             self.fsm.connect_retry_timer.stop();
-                            send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                            send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                             if !self.fsm.passive_tcp_establishment {
                                 self.fsm.idle_hold_timer.start(self.fsm.idle_hold_time);
                             }
@@ -404,7 +403,7 @@ impl Neighbor {
                             // TODO send notification
                         }
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO dampen peer
@@ -416,7 +415,7 @@ impl Neighbor {
                         if self.fsm.delay_open_timer.is_running()? {
                             self.fsm.connect_retry_timer.stop();
                             self.fsm.delay_open_timer.stop();
-                            send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                            send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         }
                         else {
                             self.fsm.connect_retry_timer.stop();
@@ -434,7 +433,7 @@ impl Neighbor {
                         self.fsm.connect_retry_timer.stop();
                         self.fsm.delay_open_timer.stop();
 
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO dampen peer
@@ -459,7 +458,7 @@ impl Neighbor {
                         }
                         // TODO release all resources
                         self.fsm.delay_open_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter = 0;
                         self.fsm.connect_retry_timer.stop();
                         self.fsm.state = State::Idle;
@@ -535,7 +534,7 @@ impl Neighbor {
                         if self.fsm.damp_peer_oscillations {
                             // TODO
                         }
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         if !self.fsm.passive_tcp_establishment {
                             self.fsm.idle_hold_timer.start(self.fsm.idle_hold_time);
                         }
@@ -566,7 +565,7 @@ impl Neighbor {
                             // TODO send notification
                         }
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO dampen peer
@@ -579,7 +578,7 @@ impl Neighbor {
                         if self.fsm.delay_open_timer.is_running()? {
                             self.fsm.connect_retry_timer.stop();
                             self.fsm.delay_open_timer.stop();
-                            send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                            send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         }
                         else {
                             self.fsm.connect_retry_timer.stop();
@@ -596,7 +595,7 @@ impl Neighbor {
                     Event::IdleHoldTimerExpires | Event::OpenMsg(_) | Event::OpenCollisionDump |
                     Event::NotifMsg(_) | Event::KeepAliveMsg | Event::UpdateMsg(_) | Event::RouteRefreshMsg(_) | Event::UpdateMsgErr => {
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO dampen peer
@@ -617,7 +616,7 @@ impl Neighbor {
                     Event::ManualStop => {
                         // TODO send notification with Cease
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter = 0;
                         self.fsm.state = State::Idle;
                         println!("Moving to {:#?}", self.fsm.state);
@@ -626,7 +625,7 @@ impl Neighbor {
                     Event::AutomaticStop => {
                         // TODO send notification with Cease
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -638,7 +637,7 @@ impl Neighbor {
                     Event::HoldTimerExpires => {
                         // TODO send notification with Hold Timer Expired
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -674,7 +673,17 @@ impl Neighbor {
                                 println!("Unable to use Neighbor's tcp_write_stream because it's None");
                             }
                         }
-                        // TODO process Open (anything left?)
+                        // TODO validate the open message and our settings (version, as, hold, ident, optional param)
+                        if let AS::AS2(as_num) = &self.as_num {
+                            if *as_num != msg.as_number {
+                                println!("ERROR: Neighbor AS number in Open message does not match the AS number in our neighbor config");
+                                // TODO generate notification
+                                send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, None).await;
+                                self.fsm.state = State::Idle;
+                                return Err(NeighborError::ASNumMismatch.into());
+                            }
+                        }
+
                         if msg.hold_time < self.fsm.hold_time {
                             self.fsm.hold_time = msg.hold_time;
                         }
@@ -708,7 +717,7 @@ impl Neighbor {
                         // TODO send Notification with Cease
                         self.fsm.connect_retry_timer.stop();
                         // rlease bgp resources
-                        // drop tcp conn
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -720,7 +729,7 @@ impl Neighbor {
                     Event::NotifMsgVerErr => {
                         self.fsm.connect_retry_timer.stop();
                         // rlease bgp resources
-                        // drop tcp conn
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.state = State::Idle;
                         println!("Moving to {:#?}", self.fsm.state);
                         Ok(())
@@ -730,7 +739,7 @@ impl Neighbor {
                     Event::KeepAliveMsg | Event::UpdateMsg(_) | Event::UpdateMsgErr => {
                         // TODO send Notification with error code FSM error
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO dampen peer
@@ -752,7 +761,7 @@ impl Neighbor {
                     Event::ManualStop => {
                         // TODO send notification with Cease
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter = 0;
                         self.fsm.state = State::Idle;
                         println!("Moving to {:#?}", self.fsm.state);
@@ -761,7 +770,7 @@ impl Neighbor {
                     Event::AutomaticStop => {
                         // TODO send notification with Cease
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -773,7 +782,7 @@ impl Neighbor {
                     Event::HoldTimerExpires => {
                         // TODO send notification with Hold Timer Expired
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -798,7 +807,7 @@ impl Neighbor {
                     },
                     Event::TcpConnectionFails | Event::NotifMsg(_) => {
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -812,7 +821,7 @@ impl Neighbor {
                     },
                     Event::NotifMsgVerErr => {
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.state = State::Idle;
                         println!("Moving to {:#?}", self.fsm.state);
                         Ok(())
@@ -844,7 +853,7 @@ impl Neighbor {
                     Event::OpenCollisionDump => {
                         // TODO send notification with Cease
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -859,7 +868,7 @@ impl Neighbor {
                         // TODO Need to confirm that we will always receive a Keepalive on neighbor coming up even if holdtime is 0
                         self.fsm.state = State::Established;
                         println!("Moving to {:#?}", self.fsm.state);
-                        //self.channel.bring_up().await?;
+                        self.channel.bring_up().await?;
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
@@ -889,7 +898,7 @@ impl Neighbor {
                         // TODO send notification with Cease
                         self.fsm.connect_retry_timer.stop();
                         // TODO delete all routes for this conn.
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter = 0;
                         // self.channel.take_down().await?;
                         self.fsm.keepalive_timer.stop();
@@ -902,7 +911,7 @@ impl Neighbor {
                         // TODO send notification with Cease
                         self.fsm.connect_retry_timer.stop();
                         // TODO delete all routes for this conn.
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -917,7 +926,7 @@ impl Neighbor {
                     Event::HoldTimerExpires => {
                         // TODO send notification with error code hold timer expired
                         self.fsm.connect_retry_timer.stop();
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -970,7 +979,7 @@ impl Neighbor {
                         // TODO send Notification with cease
                         self.fsm.connect_retry_timer.stop();
                         // TODO delete all routes for this conn.
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -985,7 +994,7 @@ impl Neighbor {
                     Event::NotifMsg(msg) => {
                         self.fsm.connect_retry_timer.stop();
                         // TODO delete all routes for this conn.
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         // self.channel.take_down().await?;
                         self.fsm.keepalive_timer.stop();
@@ -997,7 +1006,7 @@ impl Neighbor {
                     Event::TcpConnectionFails | Event::NotifMsgVerErr  => {
                         self.fsm.connect_retry_timer.stop();
                         // TODO delete all routes for this conn.
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         // self.channel.take_down().await?;
                         if !self.fsm.passive_tcp_establishment {
@@ -1041,7 +1050,7 @@ impl Neighbor {
                         // TODO send Notification with an update error
                         self.fsm.connect_retry_timer.stop();
                         // TODO delete all routes for this conn.
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                             // TODO damp peer
@@ -1056,14 +1065,14 @@ impl Neighbor {
                     Event::RouteRefreshMsg(msg) => {
                         // TODO handle route refresh
                         Ok(())
-                    }
+                    },
                    Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
                         Event::BGPOpenWithDelayOpenTimerRunning | Event::BGPHeaderErr | Event::BGPOpenMsgErr => {
 
                         // TODO send Notification with an update error
                         self.fsm.connect_retry_timer.stop();
                         // TODO delete all routes for this conn.
-                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, event.clone()).await;
+                        send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx, self.fsm.state, Some(event.clone())).await;
                         self.fsm.connect_retry_counter += 1;
                         if self.fsm.damp_peer_oscillations {
                         // TODO damp peer
@@ -1075,6 +1084,56 @@ impl Neighbor {
                        println!("Moving to {:#?}", self.fsm.state);
                        Ok(())
                    },
+                    Event::SendUpdateMsg => {
+                        if let Some(tcp_write_stream) = &mut self.tcp_write_stream {
+                            // TODO consolidate update messages when multiple NLRI have the same path attributes
+                            for (nlri, route) in &self.adj_rib_out {
+
+
+                                let mut pa_len: u16 = 0;
+                                let mut path_attributes: Vec<PathAttribute> = Vec::new();
+
+                                let origin = PathAttribute::new_origin(route.origin);
+                                pa_len += origin.pa_data_len;
+                                path_attributes.push(origin);
+
+                                let as_path = PathAttribute::new_as_path(route.as_path.clone());
+                                pa_len += as_path.pa_data_len;
+                                path_attributes.push(as_path);
+
+                                let next_hop = PathAttribute::new_next_hop(route.next_hop);
+                                pa_len += next_hop.pa_data_len;
+                                path_attributes.push(next_hop);
+
+                                // match self.peer_type {
+                                //     PeerType::Internal => {
+                                //         // TODO local pref
+                                //     },
+                                //     PeerType::External => {
+                                //
+                                //     }
+                                //     // TODO MED ,atomic_agregate, aggregator
+                                // }
+
+
+
+                                match UpdateMessage::new(None, 0, None, pa_len, Some(path_attributes), Some(vec![route.nlri.clone()])) {
+                                    Ok(message) => {
+                                        if let Err(e) = send_update(tcp_write_stream, message).await {
+                                            println!("ERROR: Unable to send Update Message to neighbor in State::Established and Event::SendUpdateMsg - {:#?}", e);
+                                        };
+                                    },
+                                    Err(e) => {
+                                        println!("ERROR: {:#?}", e);
+                                    }
+                                }
+
+                            }
+                            return Ok(());
+                        }
+                        Err(NeighborError::TCPConnDied.into())
+
+                    },
                     _ => {
                         println!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
                         Err(EventError::UnhandledEvent.into())
@@ -1118,7 +1177,7 @@ impl Neighbor {
     pub async fn handle_update_message(&mut self, tsbuf: &Vec<u8>) -> Result<(), BGPError> {
         println!("Handling update message");
         if !self.is_established() {
-            return Err(NeighborError::PeerIPNotEstablished.into())
+            return Err(NeighborError::NeighborIPNotEstablished.into())
         }
         let update_message = extract_update_message(tsbuf)?;
         self.process_routes_from_message(update_message).await?;
@@ -1235,16 +1294,25 @@ pub async fn reestablish_neighbor_streams(neighbor_arc: &Arc<Mutex<Neighbor>>) -
     None
 }
 
-pub async fn send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx: &Sender<TCPChannelMessage>, state: State, event: Event) {
+
+pub async fn send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx: &Sender<TCPChannelMessage>, state: State, event: Option<Event>) {
     if let Err(e) = tcp_channel_tx.send(TCPChannelMessage::DropTCP).await {
-        println!("Unable to send TCPChannelMessage::DropTCP in state {:#?} and event {:#?}", state, event);
+        match event {
+            Some(e) => {
+                println!("Unable to send TCPChannelMessage::DropTCP in state {:#?} and event {:#?}", state, e);
+            },
+            None => {
+                println!("Unable to send TCPChannelMessage::DropTCP in state {:#?}", state);
+            }
+        }
     }
 }
+
 
 pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, mut neighbor: Neighbor, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
 
-    // setup oneshot channel to be used for signaling TCP dropping
+    // setup channel to be used for signaling TCP dropping
     let (tcp_channel_tx, mut tcp_channel_rx) = tokio::sync::mpsc::channel::<TCPChannelMessage>(1);
 
     // max bgp msg size should never exceed 4096
@@ -1284,7 +1352,33 @@ pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, mut neighbor: Neighbor
             neighbor.generate_event(Event::TcpCRAcked);
         }
 
+        {
+            // TODO move to a wrapper function
+            let mut neighbor = neighbor_arc.lock().await;
+            let mut skip_generate_event = true;
+            while let Ok(ChannelMessage::Route(route)) = neighbor.channel.rx.try_recv() {
+                // don't send an ebgp neighbor routes with their own AS, that's not nice
+                let mut skip_route_insert = false;
+                if neighbor.peer_type == PeerType::External {
+                    for as_num in &route.as_path.as_path_segment.as_list {
+                        if *as_num == neighbor.as_num {
+                            skip_route_insert = true;
+                        }
+                    }
+                }
+                if !skip_route_insert {
+                    skip_generate_event = false;
+                    neighbor.adj_rib_out.insert(route.nlri.clone(), route);
+                }
 
+            }
+            if !skip_generate_event {
+                neighbor.generate_event(Event::SendUpdateMsg);
+
+            }
+        }
+  
+    
         tsbuf.clear();
         // TODO move the TCP stream to its own task, and also create a message queue handler similar to our event handler
         // The above will allow us to not block the event handler
