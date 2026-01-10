@@ -175,6 +175,8 @@ impl BGPProcess {
 
     fn populate_local_rib_from_config(&mut self) {
         for configured_network in &self.configured_networks {
+            println!("populating local rib from config");
+            println!("configured_network is {:#?}", configured_network);
             let nlri = configured_network.nlri.clone();
             let origin = Origin::new(OriginType::IGP);
             let as_path = self.generate_local_as_path_for_advertisement();
@@ -189,7 +191,7 @@ impl BGPProcess {
         }
     }
 
-     async fn populate_local_rib_from_config_wrapper(bgp_proc_arc: &Arc<Mutex<BGPProcess>>) {
+     async fn populate_local_rib_from_config_arc(bgp_proc_arc: &Arc<Mutex<BGPProcess>>) {
          let mut bgp_proc = bgp_proc_arc.lock().await;
          bgp_proc.populate_local_rib_from_config();
      }
@@ -203,7 +205,7 @@ impl BGPProcess {
     pub async fn run_process_loop(bgp_proc: Arc<Mutex<BGPProcess>>, address: String, port: String) {
         let bgp_proc_arc = Arc::clone(&bgp_proc);
         // init
-        BGPProcess::populate_local_rib_from_config_wrapper(&bgp_proc_arc).await;
+        BGPProcess::populate_local_rib_from_config_arc(&bgp_proc_arc).await;
         let all_neighbors_channels_arc = BGPProcess::init_process_channels();
         let mut all_neighbors = BGPProcess::populate_neighbors_from_config(&bgp_proc, &all_neighbors_channels_arc).await;
         BGPProcess::run_recv_message_channel_loop(Arc::clone(&bgp_proc), Arc::clone(&all_neighbors_channels_arc)).await;
@@ -379,6 +381,7 @@ impl BGPProcess {
                                 // Allow the BGP proc to send messages (routes) to the Neighbor task
                                 let mut bgp_proc = bgp_proc_arc.lock().await;
                                 for (_nlri, route_vec) in &bgp_proc.local_rib {
+                                    println!("Received ChannelMessage::NeighborUp, sending route_vec - {:#?}", route_vec);
                                     route_channel.send_route_vec(route_vec).await;
                                 }
 

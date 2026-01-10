@@ -4,7 +4,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use default::default;
-use tokio::net::TcpStream;
+//use tokio::net::TcpStream;
 use tokio::net::tcp::*;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
@@ -66,10 +66,7 @@ pub struct Neighbor {
 pub async fn run_timer_loop(neighbor_arc: Arc<Mutex<Neighbor>>, peer_ip: Ipv4Addr) {
     tokio::spawn( async move {
         loop {
-            {
-                let mut neighbor = neighbor_arc.lock().await;
-                neighbor.check_timers_and_generate_events().await;
-            }
+            { neighbor_arc.lock().await.check_timers_and_generate_events().await; }
             // sleep outside of this so we don't hold a mutex
             sleep(Duration::from_secs(1)).await;
         }
@@ -1279,20 +1276,48 @@ impl Neighbor {
         }
         Ok(())
     }
-}
 
-pub async fn reestablish_neighbor_streams(neighbor_arc: &Arc<Mutex<Neighbor>>) -> Option<OwnedReadHalf> {
-    let mut neighbor = neighbor_arc.lock().await;
-    //if neighbor.channel.is_active && !neighbor.is_established() {
-    if neighbor.tcp_write_stream.is_none() {
-        if let Some(new_tcp_stream) = neighbor.channel.recv_tcp_conn_from_bgp_proc() {
-            let (tcp_r_stream, tcp_wr_stream) = new_tcp_stream.into_split();
-            neighbor.tcp_write_stream = Some(tcp_wr_stream);
-           return Some(tcp_r_stream)
+    pub async fn recv_routes_from_bgp_proc(&mut self) {
+        while let Ok(ChannelMessage::Route(route)) = self.channel.rx.try_recv() {
+            // don't send an ebgp neighbor routes with their own AS, it wastes CPU cycles for the receiver since they will reject that route
+            if self.peer_type == PeerType::External && route.as_path.as_path_segment.as_list.contains(&self.as_num) {
+                println!("BGP proc will not transfer route {:#?} to neighbor adj-rib-out because the peer is External and the route contains the peer's AS", route);
+                continue;
+            }
+            self.adj_rib_out.insert(route.nlri.clone(), route);
+            self.generate_event(Event::SendUpdateMsg);
         }
     }
-    None
+
+    pub async fn reestablish_neighbor_streams(&mut self) -> Option<OwnedReadHalf> {
+        if self.tcp_write_stream.is_none() {
+            if let Some(new_tcp_stream) = self.channel.recv_tcp_conn_from_bgp_proc() {
+                let (tcp_r_stream, tcp_wr_stream) = new_tcp_stream.into_split();
+                self.tcp_write_stream = Some(tcp_wr_stream);
+                return Some(tcp_r_stream)
+            }
+        }
+        None
+    }
 }
+// end impl Neighbor
+
+
+
+
+// I refactored this from an associated func to a method
+// pub async fn reestablish_neighbor_streams(neighbor_arc: &Arc<Mutex<Neighbor>>) -> Option<OwnedReadHalf> {
+//     let mut neighbor = neighbor_arc.lock().await;
+//     //if neighbor.channel.is_active && !neighbor.is_established() {
+//     if neighbor.tcp_write_stream.is_none() {
+//         if let Some(new_tcp_stream) = neighbor.channel.recv_tcp_conn_from_bgp_proc() {
+//             let (tcp_r_stream, tcp_wr_stream) = new_tcp_stream.into_split();
+//             neighbor.tcp_write_stream = Some(tcp_wr_stream);
+//            return Some(tcp_r_stream)
+//         }
+//     }
+//     None
+// }
 
 
 pub async fn send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx: &Sender<TCPChannelMessage>, state: State, event: Option<Event>) {
@@ -1309,7 +1334,33 @@ pub async fn send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx: &Sender<TCPCh
 }
 
 
-pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, mut neighbor: Neighbor, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
+// I refactored this from a associated func to a method
+// pub async fn recv_routes_from_bgp_proc(neighbor_arc: &Arc<Mutex<Neighbor>>) {
+//     let mut neighbor = neighbor_arc.lock().await;
+//     let mut skip_generate_event = true;
+//     while let Ok(ChannelMessage::Route(route)) = neighbor.channel.rx.try_recv() {
+//         // don't send an ebgp neighbor routes with their own AS, that's not nice
+//         let mut skip_route_insert = false;
+//         if neighbor.peer_type == PeerType::External {
+//             for as_num in &route.as_path.as_path_segment.as_list {
+//                 if *as_num == neighbor.as_num {
+//                     skip_route_insert = true;
+//                 }
+//             }
+//         }
+//         if !skip_route_insert {
+//             skip_generate_event = false;
+//             neighbor.adj_rib_out.insert(route.nlri.clone(), route);
+//         }
+//
+//     }
+//     if !skip_generate_event {
+//         neighbor.generate_event(Event::SendUpdateMsg);
+//
+//     }
+// }
+
+pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighbor: Neighbor, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
 
     // setup channel to be used for signaling TCP dropping
@@ -1340,45 +1391,21 @@ pub async fn run_neighbor_loop(mut tcp_stream: TcpStream, mut neighbor: Neighbor
         if let Ok(TCPChannelMessage::DropTCP) = tcp_channel_rx.try_recv() {
             println!("Dropping TCP connection due to received signal TCPChannelMessage::DropTCP");
             tcp_read_stream = None;
-            let mut neighbor = neighbor_arc.lock().await;
-            neighbor.tcp_write_stream = None;
+            neighbor_arc.lock().await.tcp_write_stream = None;
         }
 
 
         // the write half is moved inside the func, whereas the read half is returned here and move it into the correct var
-        if let Some(new_tcp_read_stream) = reestablish_neighbor_streams(&neighbor_arc).await {
+        if let Some(new_tcp_read_stream) = neighbor_arc.lock().await.reestablish_neighbor_streams().await {
             tcp_read_stream = Some(new_tcp_read_stream);
-            let mut neighbor = neighbor_arc.lock().await;
-            neighbor.generate_event(Event::TcpCRAcked);
+            neighbor_arc.lock().await.generate_event(Event::TcpCRAcked);
         }
 
-        {
-            // TODO move to a wrapper function
-            let mut neighbor = neighbor_arc.lock().await;
-            let mut skip_generate_event = true;
-            while let Ok(ChannelMessage::Route(route)) = neighbor.channel.rx.try_recv() {
-                // don't send an ebgp neighbor routes with their own AS, that's not nice
-                let mut skip_route_insert = false;
-                if neighbor.peer_type == PeerType::External {
-                    for as_num in &route.as_path.as_path_segment.as_list {
-                        if *as_num == neighbor.as_num {
-                            skip_route_insert = true;
-                        }
-                    }
-                }
-                if !skip_route_insert {
-                    skip_generate_event = false;
-                    neighbor.adj_rib_out.insert(route.nlri.clone(), route);
-                }
+        neighbor_arc.lock().await.recv_routes_from_bgp_proc().await;
+        //recv_routes_from_bgp_proc(&neighbor_arc).await;
 
-            }
-            if !skip_generate_event {
-                neighbor.generate_event(Event::SendUpdateMsg);
 
-            }
-        }
-  
-    
+
         tsbuf.clear();
         // TODO move the TCP stream to its own task, and also create a message queue handler similar to our event handler
         // The above will allow us to not block the event handler

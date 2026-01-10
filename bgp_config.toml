@@ -8,7 +8,7 @@ default_local_preference = 100
 prefix = "1.1.1.1/32"
 
 [[net_advertisements_config]]
-prefix = "10.0.0.0/24"
+prefix = "10.1.0.0/24"
 
 [[neighbors_config]]
 ip = "10.0.0.23"
