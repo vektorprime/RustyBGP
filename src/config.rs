@@ -27,7 +27,12 @@ pub struct ProcessConfig {
     pub my_as: u16,
     pub router_id: String,
     pub next_hop_ip: String,
-    pub default_local_preference: u32
+    pub default_local_preference: u32,
+    pub default_med: u32,
+    pub route_refresh_prestandard: bool,
+    pub route_refresh: bool,
+    pub enhanced_route_refresh: bool,
+    pub extended_4byte_asn: bool
 }
 
 

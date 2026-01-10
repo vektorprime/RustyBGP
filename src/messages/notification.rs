@@ -1,9 +1,10 @@
 use std::net::Ipv4Addr;
 use tokio::net::TcpStream;
 use crate::errors::MessageError;
-use crate::messages::{BGPVersion, OptionalParameter};
+use crate::messages::{BGPVersion};
 use crate::messages::header::MessageHeader;
 use crate::messages::keepalive::send_keepalive;
+use crate::messages::optional_parameters::Capability;
 use crate::process::BGPProcess;
 
 #[derive(PartialEq, Debug, Clone)]
@@ -15,7 +16,7 @@ pub struct NotificationMessage {
     pub hold_time: u16, // either 0 or at least 3 sec, lowest between the two peers
     pub identifier: Ipv4Addr,
     pub optional_parameters_length: u8,
-    pub optional_parameters: Option<Vec<OptionalParameter>>,
+    pub optional_parameters: Option<Vec<Capability>>,
 }
 
 

@@ -6,8 +6,9 @@ pub mod keepalive;
 pub mod open;
 pub mod header;
 pub mod update;
-pub(crate) mod route_refresh;
-pub(crate) mod notification;
+pub mod route_refresh;
+pub mod notification;
+pub mod optional_parameters;
 
 use keepalive::*;
 use open::*;
@@ -106,13 +107,7 @@ impl BGPVersion {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
-pub struct OptionalParameter {
-    param_type: u8,
-    param_length: u8,
-    // TODO make the params structs or enums
-    parameter_value: Vec<u8>, //variable length
-}
+
 
 pub fn parse_packet_type(tsbuf: &Vec<u8>) -> Result<MessageType, BGPError> {
     match tsbuf.get(0..16) {

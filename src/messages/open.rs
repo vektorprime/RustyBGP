@@ -9,6 +9,7 @@ use crate::finite_state_machine::State;
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
+use crate::messages::optional_parameters::{Capability, OptionalParameters};
 use crate::neighbors::{Neighbor, PeerType};
 use crate::routes::NLRI;
 use crate::utils::*;
@@ -153,12 +154,12 @@ pub struct OpenMessage {
     pub hold_time: u16, // either 0 or at least 3 sec, lowest between the two peers
     pub identifier: Ipv4Addr,
     pub optional_parameters_length: u8,
-    pub optional_parameters: Option<Vec<OptionalParameter>>,
+    pub optional_parameters: Option<OptionalParameters>,
 }
 
 
 impl OpenMessage {
-    pub fn new(version: BGPVersion, as_number: u16, hold_time: u16, identifier: Ipv4Addr, optional_parameters_length: u8, optional_parameters: Option<Vec<OptionalParameter>> ) -> Result<Self, MessageError> {
+    pub fn new(version: BGPVersion, as_number: u16, hold_time: u16, identifier: Ipv4Addr, optional_parameters_length: u8, optional_parameters: Option<OptionalParameters>) -> Result<Self, MessageError> {
         // 28 bytes base without params
         let message_header_len_field = 28 + optional_parameters_length as u16;
         let message_header = MessageHeader::new(MessageType::Open, Some(message_header_len_field))?;
@@ -206,7 +207,8 @@ impl OpenMessage {
         let identifier_bytes = self.identifier.to_bits().to_be_bytes();
         len += 4;
 
-        let opt_params_len : u8 = 28;
+        // let opt_params_len : u8 = 28;
+        let opt_params_len : u8 = 0;
         len += 1; // for the len field itself
         len += opt_params_len as u16; // for the params
 
@@ -236,8 +238,8 @@ impl OpenMessage {
         //message.push(0);
         message.push(opt_params_len);
 
-        let opt_params: [u8; 28] = [0x02, 0x06, 0x01, 0x04, 0x00, 0x01, 0x00, 0x01, 0x02, 0x02, 0x80, 0x00, 0x02, 0x02, 0x02, 0x00, 0x02, 0x02, 0x46, 0x00, 0x02, 0x06, 0x41, 0x04, 0x00, 0x00, 0x00, 0x01];
-        message.extend_from_slice(&opt_params);
+        // let opt_params: [u8; 28] = [0x02, 0x06, 0x01, 0x04, 0x00, 0x01, 0x00, 0x01, 0x02, 0x02, 0x80, 0x00, 0x02, 0x02, 0x02, 0x00, 0x02, 0x02, 0x46, 0x00, 0x02, 0x06, 0x41, 0x04, 0x00, 0x00, 0x00, 0x01];
+        // message.extend_from_slice(&opt_params);
 
         message
     }

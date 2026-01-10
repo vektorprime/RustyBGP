@@ -1,4 +1,5 @@
 
+use crate::messages::update::MultiExitDisc;
 use std::net::{IpAddr, Ipv4Addr};
 
 use std::str::FromStr;
@@ -16,10 +17,11 @@ use crate::messages::BGPVersion;
 use crate::utils::*;
 use crate::messages::update::AS::AS4;
 use crate::{neighbors, process};
-pub(crate) use crate::channels::{ChannelMessage, NeighborChannel};
+use crate::channels::{ChannelMessage, NeighborChannel};
 use crate::messages::update::{AsPath, AsPathSegment, AsPathSegmentType, LocalPref, NextHop, Origin, OriginType, AS};
 use crate::neighbors::{Neighbor, PeerType};
 use crate::routes::{RouteV4, NLRI};
+use crate::messages::optional_parameters::*;
 
 async fn start_tcp(address: String, port: String) -> TcpListener {
     let listener = TcpListener::bind(address + ":" + &port).await;
@@ -34,13 +36,15 @@ async fn start_tcp(address: String, port: String) -> TcpListener {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct GlobalSettings {
     pub my_as: u16,
     pub identifier: Ipv4Addr,
     pub next_hop_ip: Ipv4Addr,
     pub version: BGPVersion,
-    pub default_local_preference: u32
+    pub default_local_preference: u32,
+    pub default_med: u32,
+    pub optional_parameters: OptionalParameters
 }
 
 
@@ -59,12 +63,20 @@ impl BGPProcess {
 
     pub fn new(config_file_name: String) -> Self {
         let config = read_config_file(config_file_name);
+
         let global_settings = GlobalSettings {
             my_as: config.process_config.my_as,
             identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap(),
             next_hop_ip: Ipv4Addr::from_str(&config.process_config.next_hop_ip).unwrap(),
             default_local_preference: config.process_config.default_local_preference,
+            default_med: config.process_config.default_med,
             version: BGPVersion::V4,
+            optional_parameters: OptionalParameters::new(
+                config.process_config.route_refresh_prestandard,
+                config.process_config.route_refresh,
+                config.process_config.enhanced_route_refresh,
+                config.process_config.extended_4byte_asn
+            )
         };
 
         BGPProcess {
@@ -182,7 +194,7 @@ impl BGPProcess {
             let as_path = self.generate_local_as_path_for_advertisement();
             let next_hop = NextHop::new(self.global_settings.next_hop_ip);
             let local_pref = Some(LocalPref::new(self.global_settings.default_local_preference));
-            let med = None;
+            let med = Some(MultiExitDisc::new(self.global_settings.default_med));
             let atomic_aggregate = None;
             let aggregator = None;
             let new_route = RouteV4::new(nlri.clone(), origin, as_path, next_hop , local_pref, med, atomic_aggregate, aggregator);
@@ -277,8 +289,8 @@ impl BGPProcess {
         let bgp_proc = bgp_proc_arc.lock().await;
         let mut all_neighbors = HashMap::new();
         all_neighbors.reserve(10);
-        let my_as = bgp_proc.global_settings.my_as;
-        let global_settings = bgp_proc.global_settings;
+        let my_as = bgp_proc.global_settings.my_as.clone();
+        let global_settings = bgp_proc.global_settings.clone();
         for nc in &bgp_proc.configured_neighbors {
             match Ipv4Addr::from_str(&nc.ip) {
                 Ok(ip) => {
@@ -305,7 +317,7 @@ impl BGPProcess {
                         all_neighbors_channels.insert(ip, neighbors_channels);
                     }
 
-                    match Neighbor::new(ip, AS::AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings, bgp_channel) {
+                    match Neighbor::new(ip, AS::AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings.clone(), bgp_channel) {
                         Ok(neighbor) => {
                             all_neighbors.insert(ip, neighbor);
                         },

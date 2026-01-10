@@ -9,6 +9,7 @@ use crate::errors::{NeighborError, ProcessError};
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
+use crate::messages::optional_parameters::{Capability, OptionalParameters};
 use crate::messages::update::PAdata::*;
 use crate::neighbors::Neighbor;
 use crate::routes::*;
@@ -290,7 +291,37 @@ impl AsPath {
 
         Ok(bytes)
     }
-    pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
+
+    pub fn AS2_from_vec_u8(bytes: &Vec<u8>) -> Self {
+        let segment_type = AsPathSegmentType::from_u8(bytes[0]);
+
+        let number_of_as: u8 = bytes[1];
+        let as_list = {
+            let mut as_list: Vec<AS> = Vec::new();
+            let base_idx: usize = 2;
+            for i in 0..number_of_as as usize {
+                let current_index = base_idx + (i * 2);
+                let as_num_bytes = &bytes[current_index.. current_index + 2];
+                as_list.push(AS::AS2(u16::from_be_bytes(as_num_bytes.try_into().unwrap())));
+            }
+            as_list
+        };
+        let as_path_segment = {
+            AsPathSegment {
+                segment_type,
+                number_of_as,
+                as_list
+            }
+
+
+        };
+        AsPath {
+            category: Category::WellKnownMandatory,
+            as_path_segment
+        }
+    }
+
+    pub fn AS4_from_vec_u8(bytes: &Vec<u8>) -> Self {
         let segment_type = AsPathSegmentType::from_u8(bytes[0]);
 
         let number_of_as: u8 = bytes[1];
@@ -359,6 +390,13 @@ impl MultiExitDisc {
             category: Category::OptionalNonTransitive,
             // TODO handle unwrap and add error checking
             value: u32::from_be_bytes(bytes[0..4].try_into().unwrap()),
+        }
+    }
+
+    pub fn new(value: u32) -> Self {
+        MultiExitDisc {
+            category: Category::OptionalNonTransitive,
+            value
         }
     }
 }
@@ -456,7 +494,7 @@ impl PAdata {
                 PAdata::Origin(Origin::from_u8(bytes[0]))
             },
             TypeCode::AsPath => {
-                PAdata::AsPath(AsPath::from_vec_u8(bytes))
+                PAdata::AsPath(AsPath::AS4_from_vec_u8(bytes))
             },
             TypeCode::NextHop => {
                 PAdata::NextHop(NextHop::from_vec_u8(bytes))
@@ -821,7 +859,7 @@ pub struct UpdateMessage {
     pub nlri: Option<Vec<NLRI>>
 }
 
-pub fn extract_update_message(tsbuf: &Vec<u8>) -> Result<UpdateMessage, MessageError> {
+pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<Capability>>) -> Result<UpdateMessage, MessageError> {
     println!("Extracting update message");
     let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
     if message_len < 23 {

@@ -3,6 +3,15 @@ my_as = 2
 router_id = "1.1.1.1"
 next_hop_ip = "10.0.0.1"
 default_local_preference = 100
+default_med = 0
+route_refresh_prestandard = false
+route_refresh = false
+enhanced_route_refresh = false
+extended_4byte_asn = true
+
+
+
+
 
 [[net_advertisements_config]]
 prefix = "1.1.1.1/32"

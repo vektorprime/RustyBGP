@@ -25,6 +25,8 @@ use crate::messages::keepalive::{send_keepalive};
 use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, send_update, OpenMessage};
 use crate::process::{BGPProcess, GlobalSettings };
 use crate::channels::*;
+use crate::messages::optional_parameters::Capability;
+
 #[derive(Debug)]
 pub enum IPType {
     V4,
@@ -60,6 +62,7 @@ pub struct Neighbor {
     pub channel: NeighborChannel,
     //pub tcp_read_stream: Option<OwnedReadHalf>,
     pub tcp_write_stream: Option<OwnedWriteHalf>,
+    pub negotiated_capabilities: Option<Vec<Capability>>,
 }
 
 
@@ -133,6 +136,7 @@ impl Neighbor {
             channel: neighbor_channel,
             //tcp_read_stream: None,
             tcp_write_stream: None,
+            negotiated_capabilities: None,
         })
     }
 
@@ -671,6 +675,8 @@ impl Neighbor {
                             }
                         }
                         // TODO validate the open message and our settings (version, as, hold, ident, optional param)
+                        self.process_optional_parameters(&msg);
+
                         if let AS::AS2(as_num) = &self.as_num {
                             if *as_num != msg.as_number {
                                 println!("ERROR: Neighbor AS number in Open message does not match the AS number in our neighbor config");
@@ -1176,7 +1182,7 @@ impl Neighbor {
         if !self.is_established() {
             return Err(NeighborError::NeighborIPNotEstablished.into())
         }
-        let update_message = extract_update_message(tsbuf)?;
+        let update_message = extract_update_message(tsbuf, &self.negotiated_capabilities)?;
         self.process_routes_from_message(update_message).await?;
 
         Ok(())
@@ -1253,7 +1259,7 @@ impl Neighbor {
                 self.generate_event(Event::OpenMsg(received_msg));
             },
             MessageType::Update => {
-                let received_msg = extract_update_message(tsbuf)?;
+                let received_msg = extract_update_message(tsbuf, &self.negotiated_capabilities)?;
                 println!("Generating Event::UpdateMsg for neighbor {:#?}", self.ip);
                 self.generate_event(Event::UpdateMsg(received_msg));
             },
@@ -1313,6 +1319,18 @@ impl Neighbor {
         let message_type = parse_packet_type(msg)?;
         self.generate_event_from_message(&tsbuf, message_type)?;
         Ok(())
+    }
+
+    pub fn process_optional_parameters(&mut self, msg: &OpenMessage) {
+        // compare our capabilities and theirs, populate negotiated capabilities
+        if let Some(optional_parameters) = &msg.optional_parameters {
+            self.negotiated_capabilities = Some(Vec::new());
+            for capability in &optional_parameters.capabilities {
+                if self.global_settings.optional_parameters.capabilities.contains(&capability) {
+                    self.negotiated_capabilities.as_mut().unwrap().push(capability.clone());
+                }
+            }
+        }
     }
 }
 // end impl Neighbor
