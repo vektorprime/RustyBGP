@@ -1289,7 +1289,7 @@ impl Neighbor {
         }
     }
 
-    pub async fn reestablish_neighbor_streams(&mut self) -> Option<OwnedReadHalf> {
+    pub fn reestablish_neighbor_streams(&mut self) -> Option<OwnedReadHalf> {
         if self.tcp_write_stream.is_none() {
             if let Some(new_tcp_stream) = self.channel.recv_tcp_conn_from_bgp_proc() {
                 let (tcp_r_stream, tcp_wr_stream) = new_tcp_stream.into_split();
@@ -1298,6 +1298,21 @@ impl Neighbor {
             }
         }
         None
+    }
+
+    pub fn  generate_events_for_closed_tcp_connection(&mut self) {
+        if self.is_established() {
+            self.generate_event(Event::TcpConnectionFails);
+        }
+        else if self.fsm.state == State::Idle && self.fsm.passive_tcp_establishment {
+            self.generate_event(Event::AutomaticStartWithPassiveTcpEstablishment);
+        }
+    }
+
+    pub fn process_neighbor_message(&mut self, msg: &Vec<u8>, tsbuf: &Vec<u8>) -> Result<(), BGPError> {
+        let message_type = parse_packet_type(msg)?;
+        self.generate_event_from_message(&tsbuf, message_type)?;
+        Ok(())
     }
 }
 // end impl Neighbor
@@ -1396,7 +1411,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
 
 
         // the write half is moved inside the func, whereas the read half is returned here and move it into the correct var
-        if let Some(new_tcp_read_stream) = neighbor_arc.lock().await.reestablish_neighbor_streams().await {
+        if let Some(new_tcp_read_stream) = neighbor_arc.lock().await.reestablish_neighbor_streams() {
             tcp_read_stream = Some(new_tcp_read_stream);
             neighbor_arc.lock().await.generate_event(Event::TcpCRAcked);
         }
@@ -1421,19 +1436,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
                 match tcp_r.try_read_buf(&mut tsbuf) {
                     Ok(0) => {
                         {
-                            let mut neighbor = neighbor_arc.lock().await;
-
-                            if neighbor.is_established() {
-                                neighbor.generate_event(Event::TcpConnectionFails);
-                            }
-                            // if neighbor.fsm.state != State::Idle && !neighbor.fsm.passive_tcp_establishment {
-                            //     neighbor.generate_event(Event::TcpConnectionFails);
-                            // }
-                            else if neighbor.fsm.state == State::Idle && neighbor.fsm.passive_tcp_establishment {
-                                neighbor.generate_event(Event::AutomaticStartWithPassiveTcpEstablishment);
-                            }
-
-
+                           neighbor_arc.lock().await.generate_events_for_closed_tcp_connection();
                             //println!("matched Ok(0) inside of tcp_read_stream.try_read_buf(&mut tsbuf), generating Event::TcpConnectionFails");
                         }
                     },
@@ -1449,19 +1452,19 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
                             println!("Data in stream too low to be a valid message, skipping: {}", hex);
                             continue;
                         }
-                        match extract_messages_from_rec_data(&tsbuf[..size]) {
-                            Ok(messages) => {
-                                for m in &messages {
-                                    {
-                                        let mut neighbor = neighbor_arc.lock().await;
-                                        if let Err(e) =  parse_packet_type(m).and_then(|mt| neighbor.generate_event_from_message(&tsbuf, mt)) {
-                                            println!("Error: {:#?}, skipping message", e);
-                                        }
-                                    }
-                                }
-                            },
+
+                        let messages = match extract_messages_from_rec_data(&tsbuf[..size]) {
+                            Ok(msgs) => msgs,
                             Err(e) => {
-                                println!("Error extracting messages: {:#?}", e);
+                                println!("Error extracting messages: {:#?}, skipping", e);
+                                continue;
+                            }
+                        };
+
+                        let mut neighbor = neighbor_arc.lock().await;
+                        for msg in &messages {
+                            if let Err(e) =  neighbor.process_neighbor_message(&msg, &tsbuf) {
+                                println!("Error: {:#?}, skipping message {:#?}", e, msg);
                             }
                         }
                     },
