@@ -22,7 +22,7 @@ pub fn extract_u16_from_bytes(tsbuf: &Vec<u8>, start_index: usize, end_index: us
     }
 }
 
-pub fn extract_u8_from_byte(tsbuf: &Vec<u8>, start_index: usize, end_index: usize) -> Result<u8, MessageError> {
+pub fn extract_u8_from_bytes(tsbuf: &Vec<u8>, start_index: usize, end_index: usize) -> Result<u8, MessageError> {
     match tsbuf.get(start_index..end_index) {
         Some(bytes) => { Ok(u8::from_be_bytes(bytes.try_into().map_err(|_| MessageError::BadInt8Read)?)) },
         None => { Err(MessageError::BadInt8Read) }

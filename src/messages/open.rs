@@ -17,8 +17,11 @@ use crate::utils::*;
 
 pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError> {
     // doesn't make sense to save the len in the messsage header here because it should be calculated in the Message::new()
-    // let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
-    //
+    let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
+
+    if message_len as usize != tsbuf.len() {
+        return Err(MessageError::UpdateMessageLenAndIdxMismatch);
+    }
     // let mut message_header = MessageHeader::new(MessageType::Open, message_len);
     // message_header.length = message_len;
 
@@ -35,10 +38,42 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
 
     let hold_time = extract_u16_from_bytes(tsbuf, 22, 24)?;
 
-    let identifier = Ipv4Addr::from_bits(extract_u32_from_bytes(tsbuf, 30, 34)?);
+    let identifier = Ipv4Addr::from_bits(extract_u32_from_bytes(tsbuf, 24, 28)?);
+
+    let opt_param_len = extract_u8_from_bytes(tsbuf, 28, 29)?;
+    if opt_param_len as usize != tsbuf.len() - 29 {
+        return Err(MessageError::UpdateMessageLenAndIdxMismatch);
+    }
+    let mut opt_curr_idx = 29;
+    //let opt_start_idx = 29;
+    // 4 bytes is the min for the optional param
+    let optional_parameters = if opt_param_len >= 4 {
+        let mut capabilities: Vec<Capability> = Vec::new();
+        while opt_curr_idx < tsbuf.len() {
+            // param type 2 is capability
+            if tsbuf[opt_curr_idx] != 2 {
+                return Err(MessageError::UnableToExtractOptionalParameters)
+            }
+            opt_curr_idx += 1;
+
+            let param_len = tsbuf[opt_curr_idx];
+            opt_curr_idx += 1;
+
+            // TODO Add the rest of the capabilities like Route Refresh or Multiprotocol, for now I just want to see the AS4 capability
+            let cap_type = tsbuf[opt_curr_idx];
+
+            // 65 is AS4
+            if cap_type == 65 {
+                capabilities.push(Capability::Extended4ByteASN);
+            }
+
+            opt_curr_idx += param_len as usize;
+        }
+        Some(OptionalParameters { capabilities })
+    } else { None };
 
     // TODO read and process the optional params
-    let open_message = OpenMessage::new(BGPVersion::V4, as_number, hold_time, identifier, 0, None)?;
+    let open_message = OpenMessage::new(BGPVersion::V4, as_number, hold_time, identifier, opt_param_len, optional_parameters)?;
 
     Ok(open_message)
 
@@ -130,9 +165,9 @@ pub async fn send_open(stream: &mut OwnedWriteHalf, message: OpenMessage) -> Res
     }
 }
 
-pub async fn send_update(stream: &mut OwnedWriteHalf, message: UpdateMessage) -> Result<(), MessageError> {
+pub async fn send_update(stream: &mut OwnedWriteHalf, message: UpdateMessage, capabilities: &Option<Vec<Capability>>) -> Result<(), MessageError> {
     println!("Preparing to send Update");
-    let message_bytes = message.convert_to_bytes();
+    let message_bytes = message.convert_to_bytes(capabilities);
     let res  =stream.write_all(&message_bytes[..]).await;
     match res {
         Ok(_) => {
@@ -173,6 +208,7 @@ impl OpenMessage {
             optional_parameters
         })
     }
+
     pub fn convert_to_bytes(&self) -> Vec<u8> {
         //let message_header_len_field = 28 + optional_parameters_length as u16;
         //let message_header = MessageHeader::new(MessageType::Open, Some(message_header_len_field));
@@ -208,9 +244,9 @@ impl OpenMessage {
         len += 4;
 
         // let opt_params_len : u8 = 28;
-        let opt_params_len : u8 = 0;
+        //let opt_params_len : u8 = 0;
         len += 1; // for the len field itself
-        len += opt_params_len as u16; // for the params
+        len += self.optional_parameters_length as u16; // for the params
 
         // adding len to the vec must come second to last because we need the total len of the payload
         let len_bytes: [u8; 2] = len.to_be_bytes();
@@ -236,11 +272,15 @@ impl OpenMessage {
         // TODO remove this after testing
         // sending len 28 and opt params taken from CSR packet cap
         //message.push(0);
-        message.push(opt_params_len);
-
+        //message.push(opt_params_len);
+        message.push(self.optional_parameters_length);
         // let opt_params: [u8; 28] = [0x02, 0x06, 0x01, 0x04, 0x00, 0x01, 0x00, 0x01, 0x02, 0x02, 0x80, 0x00, 0x02, 0x02, 0x02, 0x00, 0x02, 0x02, 0x46, 0x00, 0x02, 0x06, 0x41, 0x04, 0x00, 0x00, 0x00, 0x01];
         // message.extend_from_slice(&opt_params);
-
+        let opt_params: [u8; 4] = [0x02, 0x06, 0x41, 0x04];
+        message.extend_from_slice(&opt_params);
+        // last 4 bytes are the 4 byte ASN
+        let as4_bytes = (self.as_number as u32).to_be_bytes();
+        message.extend_from_slice(&as4_bytes);
         message
     }
 }

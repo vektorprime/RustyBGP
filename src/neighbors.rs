@@ -1,9 +1,11 @@
+
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use default::default;
+
 //use tokio::net::TcpStream;
 use tokio::net::tcp::*;
 use tokio::sync::Mutex;
@@ -25,7 +27,7 @@ use crate::messages::keepalive::{send_keepalive};
 use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, send_update, OpenMessage};
 use crate::process::{BGPProcess, GlobalSettings };
 use crate::channels::*;
-use crate::messages::optional_parameters::Capability;
+use crate::messages::optional_parameters::{Capability, OptionalParameters};
 
 #[derive(Debug)]
 pub enum IPType {
@@ -91,6 +93,20 @@ pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, tcp_channel_tx: 
 
 
 impl Neighbor {
+
+    pub fn is_4byte_asn_negotiated(&mut self) -> bool {
+        if let Some(op) = &self.negotiated_capabilities {
+            if op.contains(&Capability::Extended4ByteASN) {
+                return true
+            }
+            else {
+                return false
+            }
+        }
+        return false
+    }
+
+
     pub fn set_keepalive_time(&mut self, keepalive_time_sec: u16) -> Result<(), MessageError> {
         if keepalive_time_sec < 1 {
             return Err(MessageError::HelloTimeLessThanOne);
@@ -344,7 +360,28 @@ impl Neighbor {
                         }
                         else {
                             self.fsm.connect_retry_timer.stop();
-                            let open_message = OpenMessage::new(self.global_settings.version, self.global_settings.my_as, self.fsm.hold_time, self.global_settings.identifier, 0, None)?;
+                            // TODO make a helper function here for the optional param
+                            let mut capabilities: Vec<Capability> = Vec::new();
+                            if let Some(cap_vec) = &self.negotiated_capabilities {
+                                for cap in cap_vec {
+                                    capabilities.push(cap.clone());
+                                }
+                            }
+
+                            let optional_parameters = if self.negotiated_capabilities.is_some() {
+                                Some(OptionalParameters {capabilities})
+                            } else {None};
+
+
+                            // TODO handle the opt_param_len somewhere, right now I am only looking to test the AS4 capability
+                            let opt_param_len: u8 = if optional_parameters.is_some() {
+                                8
+                            } else {
+                                0
+                            };
+
+
+                            let open_message = OpenMessage::new(self.global_settings.version, self.global_settings.my_as, self.fsm.hold_time, self.global_settings.identifier, opt_param_len, optional_parameters)?;
                             match self.tcp_write_stream.as_mut() {
                                 Some(tcp_write_stream) => {
                                     send_open(tcp_write_stream, open_message).await?;
@@ -506,7 +543,29 @@ impl Neighbor {
                         }
                         else {
                             self.fsm.connect_retry_timer.stop();
-                            let open_message = OpenMessage::new(self.global_settings.version, self.global_settings.my_as, self.fsm.hold_time, self.global_settings.identifier, 0, None)?;
+                            // TODO make a helper function here for the optional param
+                            let mut capabilities: Vec<Capability> = Vec::new();
+
+                            // We need to send our capabilities and not the negotiated onces because we have not seen the peer's Open yet
+
+                            for cap in &self.global_settings.optional_parameters.capabilities {
+                                capabilities.push(cap.clone());
+                            }
+
+
+                            let optional_parameters = if !capabilities.is_empty() {
+                                Some(OptionalParameters {capabilities})
+                            } else {None};
+
+
+                            // TODO handle the opt_param_len somewhere, right now I am only looking to test the AS4 capability
+                            let opt_param_len: u8 = if optional_parameters.is_some() {
+                                8
+                            } else {
+                                0
+                            };
+
+                            let open_message = OpenMessage::new(self.global_settings.version, self.global_settings.my_as, self.fsm.hold_time, self.global_settings.identifier, opt_param_len, optional_parameters)?;
                             match self.tcp_write_stream.as_mut() {
                                 Some(tcp_write_stream) => {
                                     send_open(tcp_write_stream, open_message).await?;
@@ -1090,8 +1149,12 @@ impl Neighbor {
                     Event::SendUpdateMsg => {
                         if let Some(tcp_write_stream) = &mut self.tcp_write_stream {
                             // TODO consolidate update messages when multiple NLRI have the same path attributes
-                            for (nlri, route) in &self.adj_rib_out {
+                            // let use_4byte_asn = if let Some(op) = &self.negotiated_capabilities {
+                            //     if op.contains(&Capability::Extended4ByteASN) {
+                            //         true } else { false }
+                            // } else { false };
 
+                            for (nlri, route) in &self.adj_rib_out {
 
                                 let mut pa_len: u16 = 0;
                                 let mut path_attributes: Vec<PathAttribute> = Vec::new();
@@ -1100,7 +1163,7 @@ impl Neighbor {
                                 pa_len += origin.pa_data_len;
                                 path_attributes.push(origin);
 
-                                let as_path = PathAttribute::new_as_path(route.as_path.clone());
+                                let as_path = PathAttribute::new_as_path(route.as_path.clone(), &self.negotiated_capabilities);
                                 pa_len += as_path.pa_data_len;
                                 path_attributes.push(as_path);
 
@@ -1118,11 +1181,9 @@ impl Neighbor {
                                 //     // TODO MED ,atomic_agregate, aggregator
                                 // }
 
-
-
-                                match UpdateMessage::new(None, 0, None, pa_len, Some(path_attributes), Some(vec![route.nlri.clone()])) {
+                                match UpdateMessage::new(None, 0, None, pa_len, Some(path_attributes), Some(vec![route.nlri.clone()]), &self.negotiated_capabilities) {
                                     Ok(message) => {
-                                        if let Err(e) = send_update(tcp_write_stream, message).await {
+                                        if let Err(e) = send_update(tcp_write_stream, message, &self.negotiated_capabilities).await {
                                             println!("ERROR: Unable to send Update Message to neighbor in State::Established and Event::SendUpdateMsg - {:#?}", e);
                                         };
                                     },
@@ -1324,9 +1385,11 @@ impl Neighbor {
     pub fn process_optional_parameters(&mut self, msg: &OpenMessage) {
         // compare our capabilities and theirs, populate negotiated capabilities
         if let Some(optional_parameters) = &msg.optional_parameters {
+            println!("Processing optional parameters");
             self.negotiated_capabilities = Some(Vec::new());
             for capability in &optional_parameters.capabilities {
                 if self.global_settings.optional_parameters.capabilities.contains(&capability) {
+                    println!("Found capability {:#?} match, adding it to self.negotiated_capabilities", capability);
                     self.negotiated_capabilities.as_mut().unwrap().push(capability.clone());
                 }
             }
@@ -1511,7 +1574,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
                 }
             },
             None => {
-                println!("No TCP read stream in run_neighbor_loop, will not attempt to read");
+                //println!("No TCP read stream in run_neighbor_loop, will not attempt to read");
                 continue;
             }
         }

@@ -13,7 +13,7 @@ use crate::messages::optional_parameters::{Capability, OptionalParameters};
 use crate::messages::update::PAdata::*;
 use crate::neighbors::Neighbor;
 use crate::routes::*;
-use crate::utils::{extract_u16_from_bytes, extract_u32_from_bytes, extract_u8_from_byte};
+use crate::utils::{extract_u16_from_bytes, extract_u32_from_bytes, extract_u8_from_bytes};
 
 
 
@@ -232,17 +232,20 @@ pub enum AS {
 }
 
 impl AS {
-    // TODO handle AS2, mayble match self, and return an u32.
-    // Then return an enum that shows variant used.
-
     pub fn to_u32(&self) -> Result<u32, ProcessError> {
-
         match self {
             AS::AS2(as_num) => Err(ProcessError::AS2Unhandled),
             AS::AS4(as_num) => Ok(*as_num)
         }
-
     }
+
+    pub fn to_u16(&self) -> Result<u16, ProcessError> {
+        match self {
+            AS::AS4(as_num) => Err(ProcessError::AS4Unhandled),
+            AS::AS2(as_num) => Ok(*as_num)
+        }
+    }
+    
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -255,7 +258,6 @@ pub struct AsPath {
 pub struct AsPathSegment {
     pub segment_type: AsPathSegmentType, // 1 byte
     pub number_of_as: u8, // number of ASes, not number of bytes
-    // TODO handle 2 vs 4 byte AS
     pub as_list: Vec<AS> // 2 or 4 bytes each
 }
 
@@ -268,7 +270,19 @@ impl AsPath {
             }
     }
 
-    pub fn to_u8_vec(&self) -> Result<Vec<u8>, ProcessError> {
+    pub fn to_u8_vec(&self, capabilities: &Option<Vec<Capability>>) -> Result<Vec<u8>, ProcessError> {
+        let as4_capability = if let Some(cap) = capabilities {
+            if cap.contains(&Capability::Extended4ByteASN) {
+                true
+            }
+            else {
+                false
+            }
+        } else {
+            false
+        };
+
+
         let mut bytes = Vec::new();
 
         // as path
@@ -286,10 +300,58 @@ impl AsPath {
 
         // variable as list
         for as_num in &self.as_path_segment.as_list {
-            bytes.extend(as_num.to_u32().unwrap().to_be_bytes());
+            if as4_capability {
+                bytes.extend(as_num.to_u32().unwrap().to_be_bytes());
+            } else {
+                bytes.extend(as_num.to_u16().unwrap().to_be_bytes());
+            }
         }
 
         Ok(bytes)
+    }
+
+    pub fn from_vec_u8(bytes: &Vec<u8>, capabilities: &Option<Vec<Capability>>) -> Self {
+
+        let as4_capability = if let Some(cap) = capabilities {
+            if cap.contains(&Capability::Extended4ByteASN) {
+                true
+            }
+            else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let as_idx_offset = if as4_capability {4} else {2};
+
+        let segment_type = AsPathSegmentType::from_u8(bytes[0]);
+
+        let number_of_as: u8 = bytes[1];
+        let as_list = {
+            let mut as_list: Vec<AS> = Vec::new();
+            let base_idx: usize = 2;
+            for i in 0..number_of_as as usize {
+                let current_index =  base_idx + (i * as_idx_offset);
+                let as_num_bytes =  &bytes[current_index.. current_index + as_idx_offset];
+                let as_obj = if as4_capability {AS::AS4(u32::from_be_bytes(as_num_bytes.try_into().unwrap()))} else {AS::AS2(u16::from_be_bytes(as_num_bytes.try_into().unwrap()))};
+                as_list.push(as_obj);
+            }
+            as_list
+        };
+        let as_path_segment = {
+            AsPathSegment {
+                segment_type,
+                number_of_as,
+                as_list
+            }
+
+
+        };
+        AsPath {
+            category: Category::WellKnownMandatory,
+            as_path_segment
+        }
     }
 
     pub fn AS2_from_vec_u8(bytes: &Vec<u8>) -> Self {
@@ -446,12 +508,34 @@ pub struct Aggregator {
 }
 
 impl Aggregator {
-    pub fn from_vec_u8(bytes: &Vec<u8>) -> Self {
+    pub fn from_vec_u8(bytes: &Vec<u8>, capabilities: &Option<Vec<Capability>>) -> Self {
+        let as4_capability = if let Some(cap) = capabilities {
+            if cap.contains(&Capability::Extended4ByteASN) {
+               true
+            }
+            else {
+               false
+            }
+        } else {
+           false
+        };
+
+        let as_num = if as4_capability {
+            // TODO handle unwrap and add error checking
+            AS::AS4(u32::from_be_bytes(bytes[0..4].try_into().unwrap()))
+        } else {
+            AS::AS2(u16::from_be_bytes(bytes[0..2].try_into().unwrap()))
+        };
+
+        let ipv4addr = if as4_capability {
+            Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7])
+        } else {
+            Ipv4Addr::new(bytes[2], bytes[3], bytes[4], bytes[5])
+        };
         Aggregator {
             category: Category::OptionalTransitive,
-            // TODO handle unwrap and add error checking
-            as_num: AS::AS4(u32::from_be_bytes(bytes[0..4].try_into().unwrap())),
-            ipv4addr: Ipv4Addr::new(bytes[4], bytes[5], bytes[6], bytes[7]),
+            as_num,
+            ipv4addr,
         }
     }
 }
@@ -488,13 +572,13 @@ pub enum PAdata {
 
 
 impl PAdata {
-    pub fn from_vec_u8(type_code: &TypeCode, bytes: &Vec<u8>) -> Self {
+    pub fn from_vec_u8(type_code: &TypeCode, bytes: &Vec<u8>, capabilities: &Option<Vec<Capability>>) -> Self {
         match *type_code {
             TypeCode::Origin => {
                 PAdata::Origin(Origin::from_u8(bytes[0]))
             },
             TypeCode::AsPath => {
-                PAdata::AsPath(AsPath::AS4_from_vec_u8(bytes))
+                PAdata::AsPath(AsPath::from_vec_u8(bytes, capabilities))
             },
             TypeCode::NextHop => {
                 PAdata::NextHop(NextHop::from_vec_u8(bytes))
@@ -509,7 +593,7 @@ impl PAdata {
                 PAdata::AtomicAggregate(AtomicAggregate::new())
             },
             TypeCode::Aggregator => {
-                PAdata::Aggregator(Aggregator::from_vec_u8(bytes))
+                PAdata::Aggregator(Aggregator::from_vec_u8(bytes, capabilities))
             }
         }
     }
@@ -636,14 +720,46 @@ impl PathAttribute {
         }
     }
 
-    pub fn new_as_path(as_path: AsPath) -> Self {
+    pub fn new_as_path(mut as_path: AsPath, capabilities: &Option<Vec<Capability>>) -> Self {
+        let as4_capability = if let Some(cap) = capabilities {
+            if cap.contains(&Capability::Extended4ByteASN) {
+                true
+            }
+            else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !as4_capability {
+            for as_obj in &mut as_path.as_path_segment.as_list {
+                let prev_as = as_obj;
+                let as_obj = match prev_as {
+                    AS::AS2(as_num) => {
+                        AS::AS2(*as_num)
+                    }
+                    AS::AS4(as_num) => {
+                        if *as_num > 65535 {
+                            AS::AS2(23456)
+                        } else {
+                            AS::AS2(*as_num as u16)
+                        }
+
+                    }
+                };
+            }
+        }
+
+        let as_num_offset = if as4_capability {4} else {2};
+
         let mut flags = Flags::new();
         flags.transitive = Flag::Transitive(true);
 
         // TODO replace len after testing is finished
         // flag 1, type 1, len, seg type 1, seg len 1, as list variable
-        let len = 2 +as_path.as_path_segment.number_of_as * 4;
-        let pa_data_len = 5 + as_path.as_path_segment.number_of_as as u16 * 4;
+        let len = 2 + as_path.as_path_segment.number_of_as * as_num_offset;
+        let pa_data_len = 5 + as_path.as_path_segment.number_of_as as u16 * as_num_offset as u16;
         let data = PAdata::AsPath(as_path);
 
         PathAttribute {
@@ -730,7 +846,7 @@ impl PathAttribute {
 
     }
 
-    pub fn convert_to_bytes(&self) -> Result<Vec<u8>, ProcessError> {
+    pub fn convert_to_bytes(&self, capabilities: &Option<Vec<Capability>>) -> Result<Vec<u8>, ProcessError> {
         let mut pa_bytes = Vec::new();
 
         // flags
@@ -751,7 +867,7 @@ impl PathAttribute {
                 pa_bytes.extend(origin.to_u8().to_be_bytes());
             },
             PAdata::AsPath(as_path) => {
-                let asp = as_path.to_u8_vec()?;
+                let asp = as_path.to_u8_vec(capabilities)?;
                 pa_bytes.extend(asp);
             },
             PAdata::NextHop(nh) => {
@@ -882,7 +998,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
         for x in 0.. (withdrawn_route_len / route_and_len_size) as usize {
             current_idx = base_idx + (route_and_len_size as usize * x);
             //println!("current_idx {}", current_idx);
-            let prefix_len = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
+            let prefix_len = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
             //println!("prefix_len {}", prefix_len);
             current_idx += 1;
             // if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
@@ -924,7 +1040,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
 
             let flags = {
                 // TODO handle these errors so we continue instead of returning from the func
-                let val = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
+                let val = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
                 Flags::from_u8(val)
             };
             //println!("flags {:#?}", flags);
@@ -935,7 +1051,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
             //println!("current_idx {}", current_idx);
 
             let type_code = {
-                let val = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
+                let val = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
                 TypeCode::from_u8(val)
             }?;
             //println!("type_code {:#?}", type_code);
@@ -945,7 +1061,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
             pa_idx += 1;
             //println!("current_idx {}", current_idx);
 
-            let len = extract_u8_from_byte(tsbuf, current_idx, current_idx + 1)?;
+            let len = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
             current_idx += 1;
             if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += 1;
@@ -973,7 +1089,8 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
             if !data_bytes.is_empty() {
 
                 // extract the PAdata object from the vec of bytes and create a new PathAtrribute object to be returned
-                let pa_data = PAdata::from_vec_u8(&type_code, &data_bytes);
+                // we use the optional parameters to determine differences in parsing (e.g., AS4 vs AS2)
+                let pa_data = PAdata::from_vec_u8(&type_code, &data_bytes, optional_parameters);
                 //println!("pa_data is  {:#?}", pa_data);
 
                 pa_collection.push(PathAttribute::new(flags, type_code, len, pa_data));
@@ -988,7 +1105,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
 
 
     if withdrawn_routes.is_some() && total_path_attribute_len == 0 {
-        let update_message = UpdateMessage::new(Some(message_len), withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, None)?;
+        let update_message = UpdateMessage::new(Some(message_len), withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, None, &None)?;
         return Ok(update_message)
     }
 
@@ -1000,7 +1117,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
 
     let nlri = extract_nlri_from_update_message(tsbuf, message_len as usize, &mut current_idx);
     // TODO read and process the optional params
-    let update_message = UpdateMessage::new(Some(message_len), withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, nlri)?;
+    let update_message = UpdateMessage::new(Some(message_len), withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, nlri, &None)?;
 
     Ok(update_message)
 
@@ -1057,7 +1174,19 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
 }
 
 impl UpdateMessage {
-    pub fn new(message_len: Option<u16>, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, nlri: Option<Vec<NLRI>> ) -> Result<Self, MessageError> {
+    pub fn new(message_len: Option<u16>, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, mut nlri: Option<Vec<NLRI>>, capabilities: &Option<Vec<Capability>> ) -> Result<Self, MessageError> {
+        let as4_capability = if let Some(cap) = capabilities {
+            if cap.contains(&Capability::Extended4ByteASN) {
+                true
+            }
+            else {
+                false
+            }
+        } else {
+            false
+        };
+
+
         // we calculate the message_len when we send with convert_to_bytes, we probably still need it for received messages
         let message_header = MessageHeader::new(MessageType::Update, message_len)?;
 
@@ -1072,7 +1201,7 @@ impl UpdateMessage {
 
     }
 
-    pub fn convert_to_bytes(&self) -> Vec<u8> {
+    pub fn convert_to_bytes(&self, capabilities: &Option<Vec<Capability>>) -> Vec<u8> {
         let mut message: Vec<u8> = vec![0xFF; 16];
 
         // marker
@@ -1119,7 +1248,7 @@ impl UpdateMessage {
             let path_att_vec = self.path_attributes.as_ref().unwrap();
             //path_att_vec_len = path_att_vec.len() as u16;
                 for pa in path_att_vec {
-                    match pa.convert_to_bytes() {
+                    match pa.convert_to_bytes(capabilities) {
                         Ok(pa_bytes) => {
                             path_att_bytes.extend(pa_bytes);
                         },

@@ -44,6 +44,7 @@ pub enum MessageError {
     UpdateMessageLenAndIdxMismatch,
     MissingWithdrawnRoutes,
     MessageLenTooBig,
+    UnableToExtractOptionalParameters
 }
 
 #[derive(PartialEq, Debug)]
@@ -56,6 +57,7 @@ pub enum EventError {
 pub enum ProcessError {
     BadNLRILen,
     AS2Unhandled,
+    AS4Unhandled,
     ASNumLenMismatch,
 }
 
