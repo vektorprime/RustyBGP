@@ -26,8 +26,8 @@ pub enum NotifErrorCode {
 impl TryFrom<u8> for NotifErrorCode {
     type Error = MessageError;
 
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
-        match val {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
             1 => Ok(NotifErrorCode::MessageHeader),
             2 => Ok(NotifErrorCode::OpenMessage),
             3 => Ok(NotifErrorCode::UpdateMessage),
@@ -40,10 +40,31 @@ impl TryFrom<u8> for NotifErrorCode {
     }
 }
 
+impl TryFrom<&[u8]> for NotifErrorCode {
+    type Error = MessageError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value[0] {
+            1 => Ok(NotifErrorCode::MessageHeader),
+            2 => Ok(NotifErrorCode::OpenMessage),
+            3 => Ok(NotifErrorCode::UpdateMessage),
+            4 => Ok(NotifErrorCode::HoldTimerExpired),
+            5 => Ok(NotifErrorCode::FSM),
+            6 => Ok(NotifErrorCode::Cease),
+            _ => Err(MessageError::BadNotifErrorCode)
+
+        }
+    }
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum NotifErrorSubCode {
     MsgHdr(NotifErrorMsgHdrSubCode),
     Open(NotifErrorOpenSubCode),
     Update(NotifErrorUpdateSubCode),
+    HoldTimerExpired,
+    FSM,
+    Cease
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -57,8 +78,22 @@ pub enum NotifErrorMsgHdrSubCode {
 impl TryFrom<u8> for NotifErrorMsgHdrSubCode {
     type Error = MessageError;
 
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
-        match val {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            // header
+            1 => Ok(NotifErrorMsgHdrSubCode::ConnectionNotSynchronized),
+            2 => Ok(NotifErrorMsgHdrSubCode::BadMessageLength),
+            3 => Ok(NotifErrorMsgHdrSubCode::BadMessageType),
+            _ => Err(MessageError::BadNotifErrorSubCode)
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for NotifErrorMsgHdrSubCode {
+    type Error = MessageError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value[0] {
             // header
             1 => Ok(NotifErrorMsgHdrSubCode::ConnectionNotSynchronized),
             2 => Ok(NotifErrorMsgHdrSubCode::BadMessageLength),
@@ -83,8 +118,24 @@ pub enum NotifErrorOpenSubCode {
 impl TryFrom<u8> for NotifErrorOpenSubCode {
     type Error = MessageError;
 
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
-        match val {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(NotifErrorOpenSubCode::UnsupportedVersionNumber),
+            2 => Ok(NotifErrorOpenSubCode::BadPeerAS),
+            3 => Ok(NotifErrorOpenSubCode::BadBGPIdentifier),
+            4 => Ok(NotifErrorOpenSubCode::UnsupportedOptionalParameter),
+            5 => Ok(NotifErrorOpenSubCode::DeprecatedSubCode),
+            6 => Ok(NotifErrorOpenSubCode::UnacceptableHoldTime),
+            _ => Err(MessageError::BadNotifErrorSubCode)
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for NotifErrorOpenSubCode {
+    type Error = MessageError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value[0] {
             1 => Ok(NotifErrorOpenSubCode::UnsupportedVersionNumber),
             2 => Ok(NotifErrorOpenSubCode::BadPeerAS),
             3 => Ok(NotifErrorOpenSubCode::BadBGPIdentifier),
@@ -115,8 +166,8 @@ pub enum NotifErrorUpdateSubCode {
 impl TryFrom<u8> for NotifErrorUpdateSubCode {
     type Error = MessageError;
 
-    fn try_from(val: u8) -> Result<Self, Self::Error> {
-        match val {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
             1 => Ok(NotifErrorUpdateSubCode::MalformedAttributeList),
             2 => Ok(NotifErrorUpdateSubCode::UnrecognizedWellKnownAttribute),
             3 => Ok(NotifErrorUpdateSubCode::MissingWellKnownAttribute),
@@ -133,6 +184,26 @@ impl TryFrom<u8> for NotifErrorUpdateSubCode {
     }
 }
 
+impl TryFrom<&[u8]> for NotifErrorUpdateSubCode {
+    type Error = MessageError;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value[0] {
+            1 => Ok(NotifErrorUpdateSubCode::MalformedAttributeList),
+            2 => Ok(NotifErrorUpdateSubCode::UnrecognizedWellKnownAttribute),
+            3 => Ok(NotifErrorUpdateSubCode::MissingWellKnownAttribute),
+            4 => Ok(NotifErrorUpdateSubCode::AttributeFlagsError),
+            5 => Ok(NotifErrorUpdateSubCode::AttributeLengthError),
+            6 => Ok(NotifErrorUpdateSubCode::InvalidOriginAttribute),
+            7 => Ok(NotifErrorUpdateSubCode::DeprecatedSubCode),
+            8 => Ok(NotifErrorUpdateSubCode::InvalidNextHopAttribute),
+            9 => Ok(NotifErrorUpdateSubCode::OptionalAttributeError),
+            10 => Ok(NotifErrorUpdateSubCode::InvalidNetworkField),
+            11 => Ok(NotifErrorUpdateSubCode::MalformedASPath),
+            _ => Err(MessageError::BadNotifErrorSubCode)
+        }
+    }
+}
 #[derive(PartialEq, Debug, Clone)]
 pub struct NotificationMessage {
     // min length 21 bytes without variable-length data
@@ -174,22 +245,59 @@ pub fn extract_notification_message(tsbuf: &Vec<u8>) -> Result<NotificationMessa
 
     let mut current_idx: usize = 19;
 
-    let error_code = match tsbuf.get(current_idx..=current_idx + 2) {
+    let error_code = match tsbuf.get(current_idx..=current_idx + 1) {
         Some(ec) => {
-            current_idx += 4;
-            //println!("Some(p) is  {:#?}", p);
-            Some(p)
+            current_idx += 1;
+            //println!("Some(ec) is  {:#?}", ec);
+            NotifErrorCode::try_from(ec)?
         },
-        None => None
+        None => { return Err(MessageError::BadNotifErrorCode) }
     };
 
-    match NotificationMessage::new(error_code, sub_errorcode) {
+    let error_subcode = match tsbuf.get(current_idx..=current_idx + 1) {
+        Some(esc) => {
+            current_idx += 1;
+            match error_code {
+                NotifErrorCode::MessageHeader => {
+                    let sub_code = NotifErrorMsgHdrSubCode::try_from(esc)?;
+                    NotifErrorSubCode::MsgHdr(sub_code)
+                },
+                NotifErrorCode::OpenMessage => {
+                    let sub_code = NotifErrorOpenSubCode::try_from(esc)?;
+                    NotifErrorSubCode::Open(sub_code)
+                },
+                NotifErrorCode::UpdateMessage => {
+                    let sub_code = NotifErrorUpdateSubCode::try_from(esc)?;
+                    NotifErrorSubCode::Update(sub_code)
+                },
+                NotifErrorCode::HoldTimerExpired => {
+                    NotifErrorSubCode::HoldTimerExpired
+                },
+                NotifErrorCode::FSM => {
+                    NotifErrorSubCode::FSM
+                },
+                NotifErrorCode::Cease => {
+                    NotifErrorSubCode::Cease
+                },
+            }
+
+        },
+        None => { return Err(MessageError::BadNotifErrorSubCode) }
+    };
+
+    let data = if current_idx == message_len as usize {
+        None
+    } else {
+        // todo handle variable data in notif
+        let mut dt = Vec::new();
+        Some(dt)
+    };
+
+    match NotificationMessage::new(error_code, error_subcode, data) {
         Ok(msg) => {
             Ok(msg)
         },
-        Err(err) => {
-           err
-        }
+        Err(err) => Err(err)
     }
 
 
