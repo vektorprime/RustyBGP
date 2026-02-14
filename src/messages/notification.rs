@@ -243,29 +243,30 @@ pub fn extract_notification_message(tsbuf: &Vec<u8>) -> Result<NotificationMessa
 
     let mut current_idx: usize = 19;
 
-    let error_code = match tsbuf.get(current_idx..=current_idx + 1) {
+    let error_code = match tsbuf.get(current_idx) {
         Some(ec) => {
             current_idx += 1;
-            //println!("Some(ec) is  {:#?}", ec);
-            NotifErrorCode::try_from(ec)?
+            //println!("error_code Some(ec) is  {:#?}", ec);
+            NotifErrorCode::try_from(*ec)?
         },
         None => { return Err(MessageError::BadNotifErrorCode) }
     };
 
-    let error_subcode = match tsbuf.get(current_idx..=current_idx + 1) {
+    let error_subcode = match tsbuf.get(current_idx) {
         Some(esc) => {
+            //println!("error_subcode Some(esc) is  {:#?}", esc);
             current_idx += 1;
             match error_code {
                 NotifErrorCode::MessageHeader => {
-                    let sub_code = NotifErrorMsgHdrSubCode::from(esc);
+                    let sub_code = NotifErrorMsgHdrSubCode::from(*esc);
                     NotifErrorSubCode::MsgHdr(sub_code)
                 },
                 NotifErrorCode::OpenMessage => {
-                    let sub_code = NotifErrorOpenSubCode::from(esc);
+                    let sub_code = NotifErrorOpenSubCode::from(*esc);
                     NotifErrorSubCode::Open(sub_code)
                 },
                 NotifErrorCode::UpdateMessage => {
-                    let sub_code = NotifErrorUpdateSubCode::from(esc);
+                    let sub_code = NotifErrorUpdateSubCode::from(*esc);
                     NotifErrorSubCode::Update(sub_code)
                 },
                 NotifErrorCode::HoldTimerExpired => {
@@ -280,7 +281,7 @@ pub fn extract_notification_message(tsbuf: &Vec<u8>) -> Result<NotificationMessa
             }
 
         },
-        None => { return Err(MessageError::BadNotifErrorSubCode) }
+        None => { return Err(MessageError::BadNotifErrorCode) }
     };
 
     let data = if current_idx == message_len as usize {
