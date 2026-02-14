@@ -203,7 +203,7 @@ pub fn extract_messages_from_rec_data(tsbuf: &[u8]) -> Result<Vec<Vec<u8>>, Mess
         if *b == 0xFF  && i + 16 < tsbuf.len() {
             if tsbuf[i..i + 16] == bytes_to_find {
 
-                println!("Found marker in message at byte {}", i);
+                //println!("Found marker in message at byte {}", i);
                 let message_len =  match tsbuf.get(i +16..i + 18) {
                     Some(bytes) => {
                         u16::from_be_bytes(bytes.try_into().map_err(|_| MessageError::BadInt16Read)?)

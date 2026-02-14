@@ -979,7 +979,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
     println!("Extracting update message");
     let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
     if message_len < 23 {
-        return Err(MessageError::UpdateMessageLenTooLow)
+        return Err(MessageError::MessageLenTooLow)
     }
     //println!("message_len: {}", message_len);
     let withdrawn_route_len = extract_u16_from_bytes(tsbuf, 19, 21)?;

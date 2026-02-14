@@ -37,14 +37,16 @@ pub enum MessageError {
     MissingNLRI,
     MissingPathAttributes,
     MessageHeaderBadLen,
-    UpdateMessageLenTooLow,
+    MessageLenTooLow,
     HelloTimeLessThanOne,
     HoldTimeLessThanThreeAndNotZero,
     BadAttributeTypeCode,
     UpdateMessageLenAndIdxMismatch,
     MissingWithdrawnRoutes,
     MessageLenTooBig,
-    UnableToExtractOptionalParameters
+    UnableToExtractOptionalParameters,
+    BadNotifErrorCode,
+    BadNotifErrorSubCode,
 }
 
 #[derive(PartialEq, Debug)]

@@ -27,6 +27,7 @@ use crate::messages::keepalive::{send_keepalive};
 use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from_stream, send_open, send_update, OpenMessage};
 use crate::process::{BGPProcess, GlobalSettings };
 use crate::channels::*;
+use crate::messages::notification::extract_notification_message;
 use crate::messages::optional_parameters::{Capability, OptionalParameters};
 
 #[derive(Debug)]
@@ -1326,9 +1327,9 @@ impl Neighbor {
             },
             MessageType::Notification => {
                 // TODO create the func
-                // let received_msg = extract_notification_message(tsbuf)?;
+                let received_msg = extract_notification_message(tsbuf)?;
                 println!("Generating Event::NotifMsg for neighbor {:#?}", self.ip);
-                //self.generate_event(Event::NotifMsg(received_msg));
+                self.generate_event(Event::NotifMsg(received_msg));
             },
             MessageType::Keepalive => {
                 println!("Generating Event::KeepAliveMsg for neighbor {:#?}", self.ip);

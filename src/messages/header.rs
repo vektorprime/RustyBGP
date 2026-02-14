@@ -32,6 +32,7 @@ impl MessageHeader {
                     MessageType::Keepalive => 19,
                     MessageType::Open => 29,
                     MessageType::Update => 23,
+                    MessageType::Notification => 21,
                     _ => 19, // default length for other types of messages
                 }
             }
