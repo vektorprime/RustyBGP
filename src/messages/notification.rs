@@ -64,7 +64,7 @@ pub enum NotifErrorSubCode {
     Update(NotifErrorUpdateSubCode),
     HoldTimerExpired,
     FSM,
-    Cease
+    Cease,
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -73,32 +73,29 @@ pub enum NotifErrorMsgHdrSubCode {
     ConnectionNotSynchronized,
     BadMessageLength,
     BadMessageType,
+    Unknown,
 }
 
-impl TryFrom<u8> for NotifErrorMsgHdrSubCode {
-    type Error = MessageError;
+impl From<u8> for NotifErrorMsgHdrSubCode {
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn from(value: u8) -> Self {
         match value {
-            // header
-            1 => Ok(NotifErrorMsgHdrSubCode::ConnectionNotSynchronized),
-            2 => Ok(NotifErrorMsgHdrSubCode::BadMessageLength),
-            3 => Ok(NotifErrorMsgHdrSubCode::BadMessageType),
-            _ => Err(MessageError::BadNotifErrorSubCode)
+            1 => NotifErrorMsgHdrSubCode::ConnectionNotSynchronized,
+            2 => NotifErrorMsgHdrSubCode::BadMessageLength,
+            3 => NotifErrorMsgHdrSubCode::BadMessageType,
+            _ => NotifErrorMsgHdrSubCode::Unknown
         }
     }
 }
 
-impl TryFrom<&[u8]> for NotifErrorMsgHdrSubCode {
-    type Error = MessageError;
+impl From<&[u8]> for NotifErrorMsgHdrSubCode {
 
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+    fn from(value: &[u8]) -> Self {
         match value[0] {
-            // header
-            1 => Ok(NotifErrorMsgHdrSubCode::ConnectionNotSynchronized),
-            2 => Ok(NotifErrorMsgHdrSubCode::BadMessageLength),
-            3 => Ok(NotifErrorMsgHdrSubCode::BadMessageType),
-            _ => Err(MessageError::BadNotifErrorSubCode)
+            1 => NotifErrorMsgHdrSubCode::ConnectionNotSynchronized,
+            2 => NotifErrorMsgHdrSubCode::BadMessageLength,
+            3 => NotifErrorMsgHdrSubCode::BadMessageType,
+            _ => NotifErrorMsgHdrSubCode::Unknown
         }
     }
 }
@@ -113,36 +110,38 @@ pub enum NotifErrorOpenSubCode {
     UnsupportedOptionalParameter,
     DeprecatedSubCode,
     UnacceptableHoldTime,
+    UnsupportedAFI,
+    Unknown
 }
 
-impl TryFrom<u8> for NotifErrorOpenSubCode {
-    type Error = MessageError;
+impl From<u8> for NotifErrorOpenSubCode {
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn from(value: u8) -> Self {
         match value {
-            1 => Ok(NotifErrorOpenSubCode::UnsupportedVersionNumber),
-            2 => Ok(NotifErrorOpenSubCode::BadPeerAS),
-            3 => Ok(NotifErrorOpenSubCode::BadBGPIdentifier),
-            4 => Ok(NotifErrorOpenSubCode::UnsupportedOptionalParameter),
-            5 => Ok(NotifErrorOpenSubCode::DeprecatedSubCode),
-            6 => Ok(NotifErrorOpenSubCode::UnacceptableHoldTime),
-            _ => Err(MessageError::BadNotifErrorSubCode)
+            1 => NotifErrorOpenSubCode::UnsupportedVersionNumber,
+            2 => NotifErrorOpenSubCode::BadPeerAS,
+            3 => NotifErrorOpenSubCode::BadBGPIdentifier,
+            4 => NotifErrorOpenSubCode::UnsupportedOptionalParameter,
+            5 => NotifErrorOpenSubCode::DeprecatedSubCode,
+            6 => NotifErrorOpenSubCode::UnacceptableHoldTime,
+            8 => NotifErrorOpenSubCode::UnsupportedAFI,
+            _ => NotifErrorOpenSubCode::Unknown
         }
     }
 }
 
-impl TryFrom<&[u8]> for NotifErrorOpenSubCode {
-    type Error = MessageError;
+impl From<&[u8]> for NotifErrorOpenSubCode {
 
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+    fn from(value: &[u8]) -> Self {
         match value[0] {
-            1 => Ok(NotifErrorOpenSubCode::UnsupportedVersionNumber),
-            2 => Ok(NotifErrorOpenSubCode::BadPeerAS),
-            3 => Ok(NotifErrorOpenSubCode::BadBGPIdentifier),
-            4 => Ok(NotifErrorOpenSubCode::UnsupportedOptionalParameter),
-            5 => Ok(NotifErrorOpenSubCode::DeprecatedSubCode),
-            6 => Ok(NotifErrorOpenSubCode::UnacceptableHoldTime),
-            _ => Err(MessageError::BadNotifErrorSubCode)
+            1 => NotifErrorOpenSubCode::UnsupportedVersionNumber,
+            2 => NotifErrorOpenSubCode::BadPeerAS,
+            3 => NotifErrorOpenSubCode::BadBGPIdentifier,
+            4 => NotifErrorOpenSubCode::UnsupportedOptionalParameter,
+            5 => NotifErrorOpenSubCode::DeprecatedSubCode,
+            6 => NotifErrorOpenSubCode::UnacceptableHoldTime,
+            8 => NotifErrorOpenSubCode::UnsupportedAFI,
+            _ => NotifErrorOpenSubCode::Unknown
         }
     }
 }
@@ -161,46 +160,45 @@ pub enum NotifErrorUpdateSubCode {
     OptionalAttributeError,
     InvalidNetworkField,
     MalformedASPath,
+    Unknown,
 }
 
-impl TryFrom<u8> for NotifErrorUpdateSubCode {
-    type Error = MessageError;
+impl From<u8> for NotifErrorUpdateSubCode {
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn from(value: u8) -> Self {
         match value {
-            1 => Ok(NotifErrorUpdateSubCode::MalformedAttributeList),
-            2 => Ok(NotifErrorUpdateSubCode::UnrecognizedWellKnownAttribute),
-            3 => Ok(NotifErrorUpdateSubCode::MissingWellKnownAttribute),
-            4 => Ok(NotifErrorUpdateSubCode::AttributeFlagsError),
-            5 => Ok(NotifErrorUpdateSubCode::AttributeLengthError),
-            6 => Ok(NotifErrorUpdateSubCode::InvalidOriginAttribute),
-            7 => Ok(NotifErrorUpdateSubCode::DeprecatedSubCode),
-            8 => Ok(NotifErrorUpdateSubCode::InvalidNextHopAttribute),
-            9 => Ok(NotifErrorUpdateSubCode::OptionalAttributeError),
-            10 => Ok(NotifErrorUpdateSubCode::InvalidNetworkField),
-            11 => Ok(NotifErrorUpdateSubCode::MalformedASPath),
-            _ => Err(MessageError::BadNotifErrorSubCode)
+            1 => NotifErrorUpdateSubCode::MalformedAttributeList,
+            2 => NotifErrorUpdateSubCode::UnrecognizedWellKnownAttribute,
+            3 => NotifErrorUpdateSubCode::MissingWellKnownAttribute,
+            4 => NotifErrorUpdateSubCode::AttributeFlagsError,
+            5 => NotifErrorUpdateSubCode::AttributeLengthError,
+            6 => NotifErrorUpdateSubCode::InvalidOriginAttribute,
+            7 => NotifErrorUpdateSubCode::DeprecatedSubCode,
+            8 => NotifErrorUpdateSubCode::InvalidNextHopAttribute,
+            9 => NotifErrorUpdateSubCode::OptionalAttributeError,
+            10 => NotifErrorUpdateSubCode::InvalidNetworkField,
+            11 => NotifErrorUpdateSubCode::MalformedASPath,
+            _ => NotifErrorUpdateSubCode::Unknown
         }
     }
 }
 
-impl TryFrom<&[u8]> for NotifErrorUpdateSubCode {
-    type Error = MessageError;
+impl From<&[u8]> for NotifErrorUpdateSubCode {
 
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+    fn from(value: &[u8]) -> Self {
         match value[0] {
-            1 => Ok(NotifErrorUpdateSubCode::MalformedAttributeList),
-            2 => Ok(NotifErrorUpdateSubCode::UnrecognizedWellKnownAttribute),
-            3 => Ok(NotifErrorUpdateSubCode::MissingWellKnownAttribute),
-            4 => Ok(NotifErrorUpdateSubCode::AttributeFlagsError),
-            5 => Ok(NotifErrorUpdateSubCode::AttributeLengthError),
-            6 => Ok(NotifErrorUpdateSubCode::InvalidOriginAttribute),
-            7 => Ok(NotifErrorUpdateSubCode::DeprecatedSubCode),
-            8 => Ok(NotifErrorUpdateSubCode::InvalidNextHopAttribute),
-            9 => Ok(NotifErrorUpdateSubCode::OptionalAttributeError),
-            10 => Ok(NotifErrorUpdateSubCode::InvalidNetworkField),
-            11 => Ok(NotifErrorUpdateSubCode::MalformedASPath),
-            _ => Err(MessageError::BadNotifErrorSubCode)
+            1 => NotifErrorUpdateSubCode::MalformedAttributeList,
+            2 => NotifErrorUpdateSubCode::UnrecognizedWellKnownAttribute,
+            3 => NotifErrorUpdateSubCode::MissingWellKnownAttribute,
+            4 => NotifErrorUpdateSubCode::AttributeFlagsError,
+            5 => NotifErrorUpdateSubCode::AttributeLengthError,
+            6 => NotifErrorUpdateSubCode::InvalidOriginAttribute,
+            7 => NotifErrorUpdateSubCode::DeprecatedSubCode,
+            8 => NotifErrorUpdateSubCode::InvalidNextHopAttribute,
+            9 => NotifErrorUpdateSubCode::OptionalAttributeError,
+            10 => NotifErrorUpdateSubCode::InvalidNetworkField,
+            11 => NotifErrorUpdateSubCode::MalformedASPath,
+            _ => NotifErrorUpdateSubCode::Unknown
         }
     }
 }
@@ -259,15 +257,15 @@ pub fn extract_notification_message(tsbuf: &Vec<u8>) -> Result<NotificationMessa
             current_idx += 1;
             match error_code {
                 NotifErrorCode::MessageHeader => {
-                    let sub_code = NotifErrorMsgHdrSubCode::try_from(esc)?;
+                    let sub_code = NotifErrorMsgHdrSubCode::from(esc);
                     NotifErrorSubCode::MsgHdr(sub_code)
                 },
                 NotifErrorCode::OpenMessage => {
-                    let sub_code = NotifErrorOpenSubCode::try_from(esc)?;
+                    let sub_code = NotifErrorOpenSubCode::from(esc);
                     NotifErrorSubCode::Open(sub_code)
                 },
                 NotifErrorCode::UpdateMessage => {
-                    let sub_code = NotifErrorUpdateSubCode::try_from(esc)?;
+                    let sub_code = NotifErrorUpdateSubCode::from(esc);
                     NotifErrorSubCode::Update(sub_code)
                 },
                 NotifErrorCode::HoldTimerExpired => {
