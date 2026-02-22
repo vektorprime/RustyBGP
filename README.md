@@ -9,6 +9,9 @@ What is implemented:
 - Receiving routes
 - IPv4 Unicast Address Family
 - Async via Tokio
+- 2 byte and 4 byte ASN
+- Resuming of neighbors after they go down
+- Optional parameters for neighbors (capabilities like AS4, and other address families)
 
 What isn't implemented yet:
 
