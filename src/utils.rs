@@ -29,6 +29,13 @@ pub fn extract_u8_from_bytes(tsbuf: &Vec<u8>, start_index: usize, end_index: usi
     }
 }
 
+pub fn extract_slice_from_bytes<'a>(tsbuf: &'a Vec<u8>, start_index: usize, end_index:usize) -> Result<&'a [u8], MessageError> {
+    match tsbuf.get(start_index..end_index) {
+        Some(bytes) => { Ok(bytes) },
+        None => { Err(MessageError::BadInt8Read) }
+    }
+}
+
 
 pub fn get_neighbor_ipv4_address(peer_ip: IpAddr) -> Result<Ipv4Addr, NeighborError> {
     if let IpAddr::V4(ip) = peer_ip  {

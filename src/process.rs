@@ -72,10 +72,12 @@ impl BGPProcess {
             default_med: config.process_config.default_med,
             version: BGPVersion::V4,
             optional_parameters: OptionalParameters::new(
-                config.process_config.route_refresh_prestandard,
-                config.process_config.route_refresh,
-                config.process_config.enhanced_route_refresh,
-                config.process_config.extended_4byte_asn
+                config.process_config.capabilities_config.multi_protocol_extensions_config,
+                config.process_config.capabilities_config.route_refresh_prestandard,
+                config.process_config.capabilities_config.route_refresh,
+                config.process_config.capabilities_config.enhanced_route_refresh,
+                config.process_config.capabilities_config.extended_4byte_asn,
+                Some(config.process_config.my_as as u32)
             )
         };
 

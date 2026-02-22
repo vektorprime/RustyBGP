@@ -9,7 +9,7 @@ use crate::errors::{NeighborError, ProcessError};
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
-use crate::messages::optional_parameters::{Capability, OptionalParameters};
+use crate::messages::optional_parameters::{is_4byte_asn_capability_present, Capability, OptionalParameters};
 use crate::messages::update::PAdata::*;
 use crate::neighbors::Neighbor;
 use crate::routes::*;
@@ -271,13 +271,8 @@ impl AsPath {
     }
 
     pub fn to_u8_vec(&self, capabilities: &Option<Vec<Capability>>) -> Result<Vec<u8>, ProcessError> {
-        let as4_capability = if let Some(cap) = capabilities {
-            if cap.contains(&Capability::Extended4ByteASN) {
-                true
-            }
-            else {
-                false
-            }
+        let as4_capability: bool = if let Some(cap) = capabilities {
+            is_4byte_asn_capability_present(cap)
         } else {
             false
         };
@@ -301,9 +296,11 @@ impl AsPath {
         // variable as list
         for as_num in &self.as_path_segment.as_list {
             if as4_capability {
-                bytes.extend(as_num.to_u32().unwrap().to_be_bytes());
+                let num = as_num.to_u32()?;
+                bytes.extend(num.to_be_bytes());
             } else {
-                bytes.extend(as_num.to_u16().unwrap().to_be_bytes());
+                let num = as_num.to_u16()?;
+                bytes.extend(num.to_be_bytes());
             }
         }
 
@@ -313,12 +310,7 @@ impl AsPath {
     pub fn from_vec_u8(bytes: &Vec<u8>, capabilities: &Option<Vec<Capability>>) -> Self {
 
         let as4_capability = if let Some(cap) = capabilities {
-            if cap.contains(&Capability::Extended4ByteASN) {
-                true
-            }
-            else {
-                false
-            }
+            is_4byte_asn_capability_present(cap)
         } else {
             false
         };
@@ -510,14 +502,9 @@ pub struct Aggregator {
 impl Aggregator {
     pub fn from_vec_u8(bytes: &Vec<u8>, capabilities: &Option<Vec<Capability>>) -> Self {
         let as4_capability = if let Some(cap) = capabilities {
-            if cap.contains(&Capability::Extended4ByteASN) {
-               true
-            }
-            else {
-               false
-            }
+            is_4byte_asn_capability_present(cap)
         } else {
-           false
+            false
         };
 
         let as_num = if as4_capability {
@@ -722,15 +709,11 @@ impl PathAttribute {
 
     pub fn new_as_path(mut as_path: AsPath, capabilities: &Option<Vec<Capability>>) -> Self {
         let as4_capability = if let Some(cap) = capabilities {
-            if cap.contains(&Capability::Extended4ByteASN) {
-                true
-            }
-            else {
-                false
-            }
+            is_4byte_asn_capability_present(cap)
         } else {
             false
         };
+
 
         if !as4_capability {
             for as_obj in &mut as_path.as_path_segment.as_list {
@@ -1176,12 +1159,7 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
 impl UpdateMessage {
     pub fn new(message_len: Option<u16>, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, mut nlri: Option<Vec<NLRI>>, capabilities: &Option<Vec<Capability>> ) -> Result<Self, MessageError> {
         let as4_capability = if let Some(cap) = capabilities {
-            if cap.contains(&Capability::Extended4ByteASN) {
-                true
-            }
-            else {
-                false
-            }
+            is_4byte_asn_capability_present(cap)
         } else {
             false
         };

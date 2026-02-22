@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use default::default;
 
+use std::mem::discriminant;
+
 //use tokio::net::TcpStream;
 use tokio::net::tcp::*;
 use tokio::sync::Mutex;
@@ -28,7 +30,7 @@ use crate::messages::open::{extract_open_message, get_neighbor_ipv4_address_from
 use crate::process::{BGPProcess, GlobalSettings };
 use crate::channels::*;
 use crate::messages::notification::extract_notification_message;
-use crate::messages::optional_parameters::{Capability, OptionalParameters};
+use crate::messages::optional_parameters::{is_4byte_asn_capability_present, Capability, OptionalParameters};
 
 #[derive(Debug)]
 pub enum IPType {
@@ -93,15 +95,15 @@ pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, tcp_channel_tx: 
 }
 
 
-impl Neighbor {
 
+impl Neighbor {
     pub fn is_4byte_asn_negotiated(&mut self) -> bool {
-        if let Some(op) = &self.negotiated_capabilities {
-            if op.contains(&Capability::Extended4ByteASN) {
-                return true
-            }
-            else {
-                return false
+        if let Some(opt) = &self.negotiated_capabilities {
+            for o in opt {
+                match o {
+                    Capability::Extended4ByteASN(_) => return true,
+                    _ => {}
+                }
             }
         }
         return false
@@ -1388,11 +1390,18 @@ impl Neighbor {
         if let Some(optional_parameters) = &msg.optional_parameters {
             println!("Processing optional parameters");
             self.negotiated_capabilities = Some(Vec::new());
-            for capability in &optional_parameters.capabilities {
-                if self.global_settings.optional_parameters.capabilities.contains(&capability) {
-                    println!("Found capability {:#?} match, adding it to self.negotiated_capabilities", capability);
-                    self.negotiated_capabilities.as_mut().unwrap().push(capability.clone());
+            for cap_a in &optional_parameters.capabilities {
+                for cap_b in &self.global_settings.optional_parameters.capabilities {
+                    if discriminant(cap_a) == discriminant(cap_b) {
+                        println!("Found capability {:#?} match, adding it to self.negotiated_capabilities", cap_a);
+                        self.negotiated_capabilities.as_mut().unwrap().push(cap_b.clone());
+                    }
                 }
+                // if self.global_settings.optional_parameters.capabilities.contains(&capability) {
+                //     println!("Found capability {:#?} match, adding it to self.negotiated_capabilities", capability);
+                //     self.negotiated_capabilities.as_mut().unwrap().push(capability.clone());
+                // }
+
             }
         }
     }

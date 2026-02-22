@@ -4,12 +4,14 @@ use tokio::net::{TcpStream, TcpListener};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use std::path::Path;
 use tokio::net::tcp::OwnedWriteHalf;
+use crate::config::MultiProtocolExtensionsConfig;
 use crate::errors::*;
+use crate::errors::MessageError::BadMultiProtocolExtValue;
 use crate::finite_state_machine::State;
 use crate::messages::header::*;
 use crate::messages::keepalive::*;
 use crate::messages::*;
-use crate::messages::optional_parameters::{Capability, OptionalParameters};
+use crate::messages::optional_parameters::{Capability, MPExtVal, OptionalParameters};
 use crate::neighbors::{Neighbor, PeerType};
 use crate::routes::NLRI;
 use crate::utils::*;
@@ -51,20 +53,50 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
         let mut capabilities: Vec<Capability> = Vec::new();
         while opt_curr_idx < tsbuf.len() {
             // param type 2 is capability
-            if tsbuf[opt_curr_idx] != 2 {
+            let param_type = extract_u8_from_bytes(tsbuf, opt_curr_idx, opt_curr_idx + 1)?;
+            if param_type != 2 {
                 return Err(MessageError::UnableToExtractOptionalParameters)
             }
             opt_curr_idx += 1;
 
-            let param_len = tsbuf[opt_curr_idx];
+            let param_len = extract_u8_from_bytes(tsbuf, opt_curr_idx, opt_curr_idx + 1)?;
             opt_curr_idx += 1;
 
-            // TODO Add the rest of the capabilities like Route Refresh or Multiprotocol, for now I just want to see the AS4 capability
-            let cap_type = tsbuf[opt_curr_idx];
+            let mut cap_curr_idx = opt_curr_idx;
+            // TODO Add the rest of the capabilities like Route Refresh, for now I just want to see the AS4 capability and multiprotocol
+            let cap_type = extract_u8_from_bytes(tsbuf, cap_curr_idx, cap_curr_idx + 1)?;
+            cap_curr_idx += 1;
+
+            // 1 is multi protocol extensions
+            if cap_type == 1 {
+
+                // no good use for len here yet unless there's a variable length payload in afi or safi, I'll leave this in for now
+                let mp_ex_cap_len = extract_u8_from_bytes(tsbuf, cap_curr_idx, cap_curr_idx + 1)?;
+                cap_curr_idx += 1;
+
+                // 1 is ipv4, 2 is ipv6 https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml
+                let mp_ex_afi_type = extract_u16_from_bytes(tsbuf, cap_curr_idx, cap_curr_idx + 2)?;
+                // skip 3 bytes because 2 bytes for the u16 and the third byte is a reserved field
+                cap_curr_idx += 3;
+
+                // 1 is unicast 2 is multicast 128 is vpn https://www.iana.org/assignments/safi-namespace/safi-namespace.xhtml#safi-namespace-2
+                let mp_ex_safi_type = extract_u8_from_bytes(tsbuf, cap_curr_idx, cap_curr_idx + 1)?;
+                cap_curr_idx += 1;
+
+
+                let mp_ext_val = MPExtVal::new(mp_ex_afi_type, mp_ex_safi_type)?;
+                capabilities.push(Capability::MultiprotocolExtensions(mp_ext_val));
+            }
 
             // 65 is AS4
             if cap_type == 65 {
-                capabilities.push(Capability::Extended4ByteASN);
+                let as_ex_cap_len = extract_u8_from_bytes(tsbuf, cap_curr_idx, cap_curr_idx + 1)?;
+                cap_curr_idx += 1;
+
+                let as_num = extract_u32_from_bytes(tsbuf, cap_curr_idx, cap_curr_idx + 4)?;
+                cap_curr_idx += 4;
+
+                capabilities.push(Capability::Extended4ByteASN(as_num));
             }
 
             opt_curr_idx += param_len as usize;
@@ -152,17 +184,23 @@ pub fn get_neighbor_ipv4_address_from_stream(tcp_stream: &TcpStream) -> Result<I
 
 pub async fn send_open(stream: &mut OwnedWriteHalf, message: OpenMessage) -> Result<(), MessageError> {
     println!("Preparing to send Open");
-    let message_bytes = message.convert_to_bytes();
-    let res  =stream.write_all(&message_bytes[..]).await;
-    match res {
-        Ok(_) => {
-            println!("Sent Open");
-            Ok(())
+    match message.convert_to_bytes() {
+        Ok(message_bytes) => {
+            let res  =stream.write_all(&message_bytes[..]).await;
+            match res {
+                Ok(_) => {
+                    println!("Sent Open");
+                    Ok(())
+                },
+                Err(_) => {
+                    Err(MessageError::UnableToWriteToTCPStream)
+                }
+            }
         },
-        Err(_) => {
-            Err(MessageError::UnableToWriteToTCPStream)
-        }
+        Err(e) => Err(e)
     }
+
+
 }
 
 pub async fn send_update(stream: &mut OwnedWriteHalf, message: UpdateMessage, capabilities: &Option<Vec<Capability>>) -> Result<(), MessageError> {
@@ -209,7 +247,7 @@ impl OpenMessage {
         })
     }
 
-    pub fn convert_to_bytes(&self) -> Vec<u8> {
+    pub fn convert_to_bytes(&self) -> Result<Vec<u8>, MessageError> {
         //let message_header_len_field = 28 + optional_parameters_length as u16;
         //let message_header = MessageHeader::new(MessageType::Open, Some(message_header_len_field));
        // let message_header_marker: [u8; 16] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
@@ -243,10 +281,17 @@ impl OpenMessage {
         let identifier_bytes = self.identifier.to_bits().to_be_bytes();
         len += 4;
 
-        // let opt_params_len : u8 = 28;
-        //let opt_params_len : u8 = 0;
+        let mut capabilities = Vec::new();
+        if let Some(opt_params) = &self.optional_parameters {
+            for capability in &opt_params.capabilities {
+                let cap_bytes = capability.convert_to_bytes()?;
+                capabilities.extend(cap_bytes);
+            }
+        }
+
         len += 1; // for the len field itself
-        len += self.optional_parameters_length as u16; // for the params
+        len += capabilities.len() as u16; // for the params
+
 
         // adding len to the vec must come second to last because we need the total len of the payload
         let len_bytes: [u8; 2] = len.to_be_bytes();
@@ -273,14 +318,15 @@ impl OpenMessage {
         // sending len 28 and opt params taken from CSR packet cap
         //message.push(0);
         //message.push(opt_params_len);
-        message.push(self.optional_parameters_length);
+        let opt_param_len = (capabilities.len() as u8).to_be_bytes();
+        message.extend(opt_param_len);
+        message.extend(capabilities);
         // let opt_params: [u8; 28] = [0x02, 0x06, 0x01, 0x04, 0x00, 0x01, 0x00, 0x01, 0x02, 0x02, 0x80, 0x00, 0x02, 0x02, 0x02, 0x00, 0x02, 0x02, 0x46, 0x00, 0x02, 0x06, 0x41, 0x04, 0x00, 0x00, 0x00, 0x01];
         // message.extend_from_slice(&opt_params);
-        let opt_params: [u8; 4] = [0x02, 0x06, 0x41, 0x04];
-        message.extend_from_slice(&opt_params);
-        // last 4 bytes are the 4 byte ASN
-        let as4_bytes = (self.as_number as u32).to_be_bytes();
-        message.extend_from_slice(&as4_bytes);
-        message
+        // let opt_params: [u8; 4] = [0x02, 0x06, 0x41, 0x04];
+        // message.extend_from_slice(&opt_params);
+
+
+        Ok(message)
     }
 }

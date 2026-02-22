@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 use std::fs;
-
+use std::ops::Mul;
 use serde::Deserialize;
 use toml;
 
@@ -29,10 +29,66 @@ pub struct ProcessConfig {
     pub next_hop_ip: String,
     pub default_local_preference: u32,
     pub default_med: u32,
+    pub capabilities_config: CapabilitiesConfig
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone, Copy)]
+pub struct CapabilitiesConfig {
     pub route_refresh_prestandard: bool,
     pub route_refresh: bool,
     pub enhanced_route_refresh: bool,
-    pub extended_4byte_asn: bool
+    pub extended_4byte_asn: bool,
+    pub multi_protocol_extensions_config: MultiProtocolExtensionsConfig
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone, Copy, Default)]
+pub struct MultiProtocolExtensionsConfig {
+    pub ipv4_unicast: bool,
+    pub ipv4_multicast: bool,
+    pub ipv4_vpn: bool,
+    pub ipv6_unicast: bool,
+    pub ipv6_multicast: bool,
+    pub ipv6_vpn: bool,
+}
+
+
+
+impl MultiProtocolExtensionsConfig {
+    // pub fn convert_to_bytes(&self) -> Vec<u8> {
+    //     let mut bytes = Vec::new();
+    //
+    // }
+    pub fn new(afi: u16, safi: u8) -> Self {
+
+        let mut mp_ex_config = MultiProtocolExtensionsConfig::default();
+        match (afi, safi) {
+            (1, 1) => {
+                mp_ex_config.ipv4_unicast = true;
+            },
+            (1, 2) => {
+                mp_ex_config.ipv4_multicast = true;
+            },
+            (1, 128) => {
+                mp_ex_config.ipv4_vpn = true;
+            },
+            (2, 1) => {
+                mp_ex_config.ipv6_unicast = true;
+            },
+            (2, 2) => {
+                mp_ex_config.ipv6_multicast = true;
+            },
+            (2, 128) => {
+                mp_ex_config.ipv6_vpn = true;
+            },
+            (_, _) => {
+                println!("MultiProtocol afi and safi not recognized, defaulting");
+            }
+
+
+        }
+
+        mp_ex_config
+    }
 }
 
 

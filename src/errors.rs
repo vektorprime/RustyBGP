@@ -47,6 +47,9 @@ pub enum MessageError {
     UnableToExtractOptionalParameters,
     BadNotifErrorCode,
     BadNotifErrorSubCode,
+    BadMultiProtocolExtValue,
+    UnknownCapability,
+    NoMPExtValAvailable
 }
 
 #[derive(PartialEq, Debug)]
