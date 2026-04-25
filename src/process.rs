@@ -61,7 +61,7 @@ pub struct BGPProcess {
 
 impl BGPProcess {
 
-    pub fn new(config_file_name: String) -> Self {
+    pub fn new(config_file_name: &str) -> Self {
         let config = read_config_file(config_file_name);
 
         let global_settings = GlobalSettings {
@@ -216,7 +216,7 @@ impl BGPProcess {
         Arc::new(Mutex::new(all_neighbors_channels))
     }
 
-    pub async fn run_process_loop(bgp_proc: Arc<Mutex<BGPProcess>>, address: String, port: String) {
+    pub async fn run_process_loop(bgp_proc: Arc<Mutex<BGPProcess>>, address: &str, port: &str) {
         let bgp_proc_arc = Arc::clone(&bgp_proc);
         // init
         BGPProcess::populate_local_rib_from_config_arc(&bgp_proc_arc).await;
@@ -227,7 +227,7 @@ impl BGPProcess {
         //
 
 
-        let listener = start_tcp(address, port).await;
+        let listener = start_tcp(address.to_string(), port.to_string()).await;
         loop {
             // TODO handle config sync between proc and neighbors, maybe use an event based thing or just cycle through the neighbors and update
             // TODO generate events here for for overall process (also do it in neighbor run)
@@ -290,7 +290,7 @@ impl BGPProcess {
         // This function is dual purpose, return all_neighbors (who we added tx and rx channels to) + add channels to all_neighbors_channels_arc (for us to tx and rx messages from neighbor)
         let bgp_proc = bgp_proc_arc.lock().await;
         let mut all_neighbors = HashMap::new();
-        all_neighbors.reserve(10);
+        all_neighbors.reserve(2); // 2 seems sensible, a good compromise between size and efficiency
         let my_as = bgp_proc.global_settings.my_as.clone();
         let global_settings = bgp_proc.global_settings.clone();
         for nc in &bgp_proc.configured_neighbors {

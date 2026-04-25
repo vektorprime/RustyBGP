@@ -19,4 +19,7 @@ What isn't implemented yet:
 -  Best Path Calc.
 -  Processing of BGP Notification
 -  Handling of route refresh
--  Other address families
+-  Other address families (v6 or vpn)
+
+
+No AI was used to generate any of the code in this project.

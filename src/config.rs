@@ -8,7 +8,7 @@ use toml;
 use crate::routes::*;
 //used to handle the toml configurations
 
-pub fn read_config_file(file_name: String) -> Config {
+pub fn read_config_file(file_name: &str) -> Config {
     let toml_content = fs::read_to_string(file_name).unwrap();
     let config: Config = toml::from_str(&toml_content).unwrap();
     config
