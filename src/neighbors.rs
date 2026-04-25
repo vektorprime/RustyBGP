@@ -1493,15 +1493,30 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
 
     loop {
 
+        // TODO Refactor with select!
+        // tokio::select! {
+        //     biased; // used to check the futures sequentially
+        //     msg = tcp_channel_rx.recv() => {
+        //         // drop TCP conn/stream if we get a signal in the channel
+        //         if let Some(TCPChannelMessage::DropTCP) = msg {
+        //             println!("Dropping TCP connection due to received signal TCPChannelMessage::DropTCP");
+        //             tcp_read_stream = None;
+        //             neighbor_arc.lock().await.tcp_write_stream = None;
+        //         }
+        //     }
+
+
         // drop TCP conn/stream if we get a signal in the channel
         if let Ok(TCPChannelMessage::DropTCP) = tcp_channel_rx.try_recv() {
+            // Consider this is just a message being received, it's not worth refactoring.
+            // If this function was expensive, in terms of CPU time, then we'd reconsider.
             println!("Dropping TCP connection due to received signal TCPChannelMessage::DropTCP");
             tcp_read_stream = None;
             neighbor_arc.lock().await.tcp_write_stream = None;
         }
 
 
-        // the write half is moved inside the func, whereas the read half is returned here and move it into the correct var
+        // The stream write half is moved inside the func, whereas the stream read half is returned here and move it into the correct var
         if let Some(new_tcp_read_stream) = neighbor_arc.lock().await.reestablish_neighbor_streams() {
             tcp_read_stream = Some(new_tcp_read_stream);
             neighbor_arc.lock().await.generate_event(Event::TcpCRAcked);
@@ -1509,7 +1524,6 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
 
         neighbor_arc.lock().await.recv_routes_from_bgp_proc().await;
         //recv_routes_from_bgp_proc(&neighbor_arc).await;
-
 
 
         tsbuf.clear();
@@ -1527,6 +1541,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
                 match tcp_r.try_read_buf(&mut tsbuf) {
                     Ok(0) => {
                         {
+                            // Per docs "Ok(0) indicates the stream’s read half is closed and will no longer yield data."
                            neighbor_arc.lock().await.generate_events_for_closed_tcp_connection();
                             //println!("matched Ok(0) inside of tcp_read_stream.try_read_buf(&mut tsbuf), generating Event::TcpConnectionFails");
                         }
