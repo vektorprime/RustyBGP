@@ -1180,20 +1180,20 @@ impl UpdateMessage {
     }
 
     pub fn convert_to_bytes(&self, capabilities: &Option<Vec<Capability>>) -> Vec<u8> {
-        let mut message: Vec<u8> = vec![0xFF; 16];
+        let mut message: Vec<u8> = vec![0xFF; 16]; // 16
 
         // marker
         let mut len: u16 = message.len() as u16;
-        len += 2;
+        len += 2; // 18
 
         let message_type = MessageType::Update;
         let msg_type: u8 = message_type.to_u8();
-        len += 1;
+        len += 1; // 19
 
 
         // withdrawn routes len.
         let wr_len_bytes = self.withdrawn_route_len.to_be_bytes();
-        len += 2;
+        len += 2; // 21
 
         // 21
 
@@ -1220,7 +1220,7 @@ impl UpdateMessage {
         // 23
 
         //variable path atts
-        let mut path_att_vec_len: u16 = 0;
+        //let mut path_att_vec_len: u16 = 0;
         let mut path_att_bytes: Vec<u8> = Vec::new();
         if self.total_path_attribute_len > 0 && self.path_attributes.is_some() {
             let path_att_vec = self.path_attributes.as_ref().unwrap();
@@ -1247,12 +1247,38 @@ impl UpdateMessage {
 
         // I guess I could also just as_ref() and .unwrap() here
         if let Some(nlri) = &self.nlri {
-            nlri_len = nlri.len() as u16;
+            // special handling is required here because the NLRI field takes the netmask into account
+            // e.g. if NLRI is 10.1.0.0/24 then only the 10.1.0 is sent in the network bytes
+            // Remember that our NLRI vec contains the mask, then the 4 bytes of the network address
+            // so 10.1.0.0/24 would still send 4 bytes, 1 byte for mask and 3 bytes for 10.1.0
+
             for n in nlri {
-                nlri_bytes.extend(n.convert_to_bytes());
+                let nb = n.convert_to_bytes();
+                match n.len {
+                    32 => {
+                        nlri_bytes.extend(nb);
+                        len += 5;
+                    }
+                    24..=31 => {
+                        nlri_bytes.extend(&nb[0..=3]); // len and the 3 network bytes
+                        len += 4;
+                    }
+                    16..=23 => {
+                        nlri_bytes.extend(&nb[0..=2]); // len and the 2 network bytes
+                        len += 3;
+                    }
+                    0..=15  => {
+                        nlri_bytes.extend(&nb[0..=1]); // len and the 1 network byte
+                        len += 2;
+                    }
+                    _ => {
+                        panic!("Unhandled netmask size in NLRI");
+                    }
+                }
             }
         }
-        len += nlri_len * 5;
+
+
 
         // adding len to the vec must come second to last because we need the total len of the payload
         let len_bytes = len.to_be_bytes();
