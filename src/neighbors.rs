@@ -1359,14 +1359,14 @@ impl Neighbor {
         }
     }
 
-    pub fn reestablish_neighbor_streams(&mut self) -> Option<OwnedReadHalf> {
-        if self.tcp_write_stream.is_none() {
-            if let Some(new_tcp_stream) = self.channel.recv_tcp_conn_from_bgp_proc() {
-                let (tcp_r_stream, tcp_wr_stream) = new_tcp_stream.into_split();
-                self.tcp_write_stream = Some(tcp_wr_stream);
-                return Some(tcp_r_stream)
-            }
+    pub fn reestablish_neighbor_streams(&mut self) -> Option<(OwnedReadHalf,OwnedWriteHalf)> {
+        println!("in reestablish_neighbor_streams");
+        if let Some(new_tcp_stream) = self.channel.recv_tcp_conn_from_bgp_proc() {
+            let (tcp_r_stream, tcp_wr_stream) = new_tcp_stream.into_split();
+            println!("Got new TCP stream, splitting into Read and Write halves");
+            return Some((tcp_r_stream, tcp_wr_stream))
         }
+
         None
     }
 
@@ -1490,6 +1490,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
     // pops and handles events
     run_event_loop(Arc::clone(&neighbor_arc), tcp_channel_tx).await;
 
+    let mut is_tcp_stream_active = true;
 
     loop {
 
@@ -1498,14 +1499,26 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
             println!("Dropping TCP connection due to received signal TCPChannelMessage::DropTCP");
             tcp_read_stream = None;
             neighbor_arc.lock().await.tcp_write_stream = None;
+            is_tcp_stream_active = false;
         }
 
+
+        if !is_tcp_stream_active {
+            let mut n = neighbor_arc.lock().await;
+            if let Some((new_tcp_read_stream, new_tcp_write_stream)) = n.reestablish_neighbor_streams() {
+                tcp_read_stream = Some(new_tcp_read_stream);
+                n.tcp_write_stream = Some(new_tcp_write_stream);
+                n.generate_event(Event::TcpCRAcked);
+            }
+        }
 
         // the write half is moved inside the func, whereas the read half is returned here and move it into the correct var
-        if let Some(new_tcp_read_stream) = neighbor_arc.lock().await.reestablish_neighbor_streams() {
-            tcp_read_stream = Some(new_tcp_read_stream);
-            neighbor_arc.lock().await.generate_event(Event::TcpCRAcked);
-        }
+        // if let Some((new_tcp_read_stream, new_tcp_write_stream)) = neighbor_arc.lock().await.reestablish_neighbor_streams() {
+        //     println!("");
+        //     tcp_read_stream = Some(new_tcp_read_stream);
+        //
+        //     neighbor_arc.lock().await.generate_event(Event::TcpCRAcked);
+        // }
 
         neighbor_arc.lock().await.recv_routes_from_bgp_proc().await;
         //recv_routes_from_bgp_proc(&neighbor_arc).await;
