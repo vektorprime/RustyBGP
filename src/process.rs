@@ -260,8 +260,9 @@ impl BGPProcess {
                                 println!("unlocked all_neighbors_channels_arc");
                                 if let Some(neighbor_channel) =  all_neighbors_channels.get_mut(&peer_ip) {
                                     println!("Got Some(neighbor_channel)");
-                                    if let Err(e) = neighbor_channel.send_tcp_conn_to_neighbor(tcp_stream) {
-                                        println!("ERROR: Unable to send TCP connection in channel - {:#?}", e);
+                                    match neighbor_channel.send_tcp_conn_to_neighbor(tcp_stream) {
+                                        Ok(_) => {println!("Sent TCP connection in neighbor channel")}
+                                        Err(e) => {println!("ERROR: Unable to send TCP connection in channel - {:#?}", e)}
                                     }
                                 }
                             }
