@@ -1093,7 +1093,7 @@ impl Neighbor {
                         Ok(())
                     },
                     Event::UpdateMsg(msg) => {
-                        // TODO filter routes or modify them in the adj_rib_in  here
+                        // TODO filter routes or modify them in the adj_rib_in here
                         // TODO handle withdrawn routes here too
                         if msg.nlri.is_none() && msg.withdrawn_routes.is_some() {
                             self.withdraw_routes_from_message(msg.clone()).await?
@@ -1523,6 +1523,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
             if let Some((new_tcp_read_stream, new_tcp_write_stream)) = n.reestablish_neighbor_streams() {
                 tcp_read_stream = Some(new_tcp_read_stream);
                 n.tcp_write_stream = Some(new_tcp_write_stream);
+                is_tcp_stream_active = true;
                 n.generate_event(Event::TcpCRAcked);
             }
         }
