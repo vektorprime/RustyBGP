@@ -985,17 +985,31 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
             //println!("prefix_len {}", prefix_len);
             current_idx += 1;
             // if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
+            ///
+            let route_len_bytes = get_route_len_bytes(prefix_len);
+            let mut nlri_bytes: [u8; 4] = [0, 0, 0, 0];
+            for x in 0..route_len_bytes {
+                nlri_bytes[x] = tsbuf[current_idx + x];
+            }
+            //nlri_bytes.extend(&tsbuf[current_idx..current_idx + route_len_bytes]);
+            // we need to pad the bytes up to 32bits so that we can make an Ipv4 add out of it
+            // let u8_to_pad: u8 = 4 - route_len_bytes;
+            // for x in 0..u8_to_pad {
+            //     nlri_bytes.push(0);
+            // }
+            let route_u32 = Ipv4Addr::from_octets(nlri_bytes);
 
-            let route_u32 = extract_u32_from_bytes(tsbuf, current_idx, current_idx + route_size as usize)?;
+            ///
+            //let route_u32 = extract_u32_from_bytes(tsbuf, current_idx, current_idx + route_size as usize)?;
             //println!("route_u32 {}", route_u32);
-            match NLRI::new(Ipv4Addr::from_bits(route_u32), prefix_len) {
+            match NLRI::new(route_u32, prefix_len) {
                 Ok(nl) => { routes.push(nl); },
                 Err(e) => {
                     println!("Error: {:#?}", e);
                 }
             }
             // regardless we need to inc the idx
-            current_idx += 4;
+            current_idx += route_len_bytes;
             //println!("current_idx {}", current_idx);
         }
         Some(routes)
@@ -1098,7 +1112,8 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
         return Err(MessageError::MissingNLRI)
     }
 
-    let nlri = extract_nlri_from_update_message(tsbuf, message_len as usize, &mut current_idx);
+    let nlri = extract_nlri_from_update_message(tsbuf, message_len as usize, current_idx)?;
+
     // TODO read and process the optional params
     let update_message = UpdateMessage::new(Some(message_len), withdrawn_route_len, withdrawn_routes, total_path_attribute_len, path_attributes, nlri, &None)?;
 
@@ -1106,55 +1121,101 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
 
 }
 
-pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: &mut usize) -> Option<Vec<NLRI>> {
-    let route_size: usize = 5;
-    let mut nlri = Vec::new();
-    // need to -1 below because we are already at the prefix len byte, if we didn't we'd end up with  4 bytes instead of 5
-    // e.g. the 61st byte is the prefix len but the prefix is 62-65
-    let nlri_count: usize = (message_len - (*current_idx - 1)) / route_size;
-    //println!("message_len is  {:#?}", message_len);
-    //println!("current_idx is  {:#?}", current_idx);
-    //println!("nlri_count is  {:#?}", nlri_count);
-
-    for i in 0..nlri_count {
-        let len: Option<u8> = {
-            match tsbuf.get(*current_idx) {
-                Some(l) => {
-                    *current_idx += 1;
-                    //println!("Some(l) is  {:#?}", l);
-                    Some(l.clone())
-                },
-                None => None
-            }
-        };
-
-       let prefix = match tsbuf.get(*current_idx..=*current_idx + 3) {
-            Some(p) => {
-                *current_idx += 4;
-                //println!("Some(p) is  {:#?}", p);
-                Some(p)
-            },
-            None => None
-        };
-        if len.is_some() && prefix.is_some() {
-            //println!("creating nlri struct");
-            let rt = NLRI {
-                len: len.unwrap(),
-                //prefix: u32::from_be_bytes(prefix.unwrap().try_into().unwrap())
-                prefix: Ipv4Addr::from_bits(u32::from_be_bytes(prefix.unwrap().try_into().unwrap()))
-            };
-            //println!("rt is  {:#?}", rt);
-            nlri.push(rt);
+pub fn get_route_len_bytes(prefix_len: u8) -> usize {
+    match prefix_len {
+        25..=32 => { 4 },
+        17..=24 => { 3 },
+        9..=16  => { 2 },
+        0..=8 =>   { 1 },
+        _ => {
+            panic!("Unhandled netmask size in NLRI");
         }
     }
+}
+pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: usize) -> Result<Option<Vec<NLRI>>,MessageError> {
+
+    let mut nlri = Vec::new();
+    let prefix_len = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
+    let mut route_len_bytes = get_route_len_bytes(prefix_len);
+    current_idx += 1;
+    let mut nlri_bytes: [u8; 4] = [0, 0, 0, 0];
+    for x in 0..route_len_bytes {
+        nlri_bytes[x] = tsbuf[current_idx + x];
+    }
+
+    let route_u32 = Ipv4Addr::from_octets(nlri_bytes);
+
+    match NLRI::new(route_u32, prefix_len) {
+        Ok(nl) => { nlri.push(nl); },
+        Err(e) => {
+            println!("Error: {:#?}", e);
+        }
+    }
+    // regardless we need to inc the idx
+    current_idx += route_len_bytes;
+    //println!("current_idx {}", current_idx);
+
     if nlri.is_empty() {
         //println!("returning None for NLRI vec");
-        None
+        Ok(None)
     } else {
         //println!("returning NLRI vec");
-        Some(nlri)
+        Ok(Some(nlri))
     }
 }
+
+
+// pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: &mut usize) -> Option<Vec<NLRI>> {
+//     let route_size: usize = 5;
+//     let mut nlri = Vec::new();
+//     // need to -1 below because we are already at the prefix len byte, if we didn't we'd end up with  4 bytes instead of 5
+//     // e.g. the 61st byte is the prefix len but the prefix is 62-65
+//     let nlri_count: usize = (message_len - (*current_idx - 1)) / route_size;
+//     //println!("message_len is  {:#?}", message_len);
+//     //println!("current_idx is  {:#?}", current_idx);
+//     //println!("nlri_count is  {:#?}", nlri_count);
+//
+//     for i in 0..nlri_count {
+//         let len: Option<u8> = {
+//             match tsbuf.get(*current_idx) {
+//                 Some(l) => {
+//                     *current_idx += 1;
+//                     //println!("Some(l) is  {:#?}", l);
+//                     Some(l.clone())
+//                 },
+//                 None => None
+//             }
+//         };
+//
+//         let prefix = match tsbuf.get(*current_idx..=*current_idx + 3) {
+//             Some(p) => {
+//                 *current_idx += 4;
+//                 //println!("Some(p) is  {:#?}", p);
+//                 Some(p)
+//             },
+//             None => None
+//         };
+//         if len.is_some() && prefix.is_some() {
+//             //println!("creating nlri struct");
+//             let rt = NLRI {
+//                 len: len.unwrap(),
+//                 //prefix: u32::from_be_bytes(prefix.unwrap().try_into().unwrap())
+//                 prefix: Ipv4Addr::from_bits(u32::from_be_bytes(prefix.unwrap().try_into().unwrap()))
+//             };
+//             //println!("rt is  {:#?}", rt);
+//             nlri.push(rt);
+//         }
+//     }
+//     if nlri.is_empty() {
+//         //println!("returning None for NLRI vec");
+//         None
+//     } else {
+//         //println!("returning NLRI vec");
+//         Some(nlri)
+//     }
+// }
+
+
 
 impl UpdateMessage {
     pub fn new(message_len: Option<u16>, withdrawn_route_len: u16, withdrawn_routes: Option<Vec<NLRI>>, total_path_attribute_len: u16, path_attributes: Option<Vec<PathAttribute>>, mut nlri: Option<Vec<NLRI>>, capabilities: &Option<Vec<Capability>> ) -> Result<Self, MessageError> {
@@ -1260,15 +1321,15 @@ impl UpdateMessage {
                         len += 5;
                     }
                     24..=31 => {
-                        nlri_bytes.extend(&nb[0..=3]); // len and the 3 network bytes
+                        nlri_bytes.extend(&nb[0..=3]); // len and the 3 prefix bytes
                         len += 4;
                     }
                     16..=23 => {
-                        nlri_bytes.extend(&nb[0..=2]); // len and the 2 network bytes
+                        nlri_bytes.extend(&nb[0..=2]); // len and the 2 prefix bytes
                         len += 3;
                     }
                     0..=15  => {
-                        nlri_bytes.extend(&nb[0..=1]); // len and the 1 network byte
+                        nlri_bytes.extend(&nb[0..=1]); // len and the 1 prefix byte
                         len += 2;
                     }
                     _ => {
