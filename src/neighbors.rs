@@ -65,6 +65,7 @@ pub struct Neighbor {
     // TODO adj-rib-out filters routes before they are sent to neighbor, generate event to send update
     pub adj_rib_out: HashMap<NLRI, RouteV4>,
     pub channel: NeighborChannel,
+    pub tx_channel_watcher: Sender<ChannelWatcherMessage>,
     //pub tcp_read_stream: Option<OwnedReadHalf>,
     pub tcp_write_stream: Option<OwnedWriteHalf>,
     pub negotiated_capabilities: Option<Vec<Capability>>,
@@ -76,7 +77,7 @@ pub async fn run_timer_loop(neighbor_arc: Arc<Mutex<Neighbor>>, peer_ip: Ipv4Add
         loop {
             { neighbor_arc.lock().await.check_timers_and_generate_events().await; }
             // sleep outside of this so we don't hold a mutex
-            sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_millis(1000)).await;
         }
     });
 }
@@ -126,7 +127,7 @@ impl Neighbor {
         Ok(())
     }
 
-    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: GlobalSettings, neighbor_channel: NeighborChannel) -> Result<Neighbor, MessageError> {
+    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: GlobalSettings, neighbor_channel: NeighborChannel, tx_channel_watcher: Sender<ChannelWatcherMessage>) -> Result<Neighbor, MessageError> {
         if keepalive_time_sec < 1 {
             return Err(MessageError::HelloTimeLessThanOne);
         }
@@ -153,6 +154,7 @@ impl Neighbor {
             adj_rib_in: HashMap::new(),
             adj_rib_out: HashMap::new(),
             channel: neighbor_channel,
+            tx_channel_watcher,
             //tcp_read_stream: None,
             tcp_write_stream: None,
             negotiated_capabilities: None,
@@ -168,7 +170,7 @@ impl Neighbor {
                 // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
             }
             
-            self.channel.withdraw_route(withdrawn_routes).await;
+            self.channel.withdraw_route(withdrawn_routes, &self.tx_channel_watcher).await;
             
             Ok(())
         }
@@ -248,7 +250,7 @@ impl Neighbor {
                 //self.routes_v4.push(rt);
                 self.adj_rib_in.insert(nlri.clone(), rt.clone());
                 // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
-                self.channel.send_route(rt).await;
+                self.channel.send_route(rt, &self.tx_channel_watcher).await;
             }
             Ok(())
         }
@@ -933,7 +935,7 @@ impl Neighbor {
                         // TODO Need to confirm that we will always receive a Keepalive on neighbor coming up even if holdtime is 0
                         self.fsm.state = State::Established;
                         println!("Moving to {:#?}", self.fsm.state);
-                        self.channel.bring_up().await?;
+                        self.channel.bring_up(&self.tx_channel_watcher).await?;
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
@@ -1212,35 +1214,6 @@ impl Neighbor {
 
 
 
-    // pub async fn handle_open_message(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
-    //     // TODO handle better, for now just accept the neighbor and mirror the capabilities for testing
-    //     // compare the open message params to configured neighbor
-    //     let received_open = extract_open_message(tsbuf)?;
-    //
-    //     //let peer_ip = get_neighbor_ipv4_address_from_stream(tcp_stream)?;
-    //
-    //     if self.is_established() {
-    //         return Err(NeighborError::NeighborAlreadyEstablished.into())
-    //     }
-    //
-    //
-    //     //let neighbor = bgp_proc.neighbors.get_mut(&peer_ip).ok_or_else(|| NeighborError::PeerIPNotRecognized)?;
-    //     let open_message = OpenMessage::new(BGPVersion::V4, bgp_proc.global_settings.my_as, self.fsm.hold_time, bgp_proc.global_settings.identifier, 0, None)?;
-    //     send_open(tcp_stream, open_message).await?;
-    //     send_keepalive(tcp_stream).await?;
-    //     //TODO handle this error so it doesn't return
-    //     self.set_hold_time(received_open.hold_time)?;
-    //     self.fsm.state = State::Established;
-    //
-    //     //add_neighbor_from_message(bgp_proc, &mut received_open, peer_ip, cn.hello_time, cn.hold_time)?;
-    //
-    //     // TODO REMOVE AFTER TESTING IT WORKS HERE
-    //     test_net_advertisements(bgp_proc, tcp_stream).await?;
-    //
-    //     Ok(())
-    //
-    // }
-
     pub async fn handle_update_message(&mut self, tsbuf: &Vec<u8>) -> Result<(), BGPError> {
         println!("Handling update message");
         if !self.is_established() {
@@ -1251,32 +1224,6 @@ impl Neighbor {
 
         Ok(())
     }
-
-
-    // pub async fn route_incoming_message_to_handler(&mut self, tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>, bgp_proc: &mut BGPProcess) -> Result<(), BGPError> {
-    //     let message_type = parse_packet_type(&tsbuf)?;
-    //     println!("{}", message_type);
-    //     match message_type {
-    //         MessageType::Open => {
-    //             self.handle_open_message(tcp_stream, tsbuf, bgp_proc).await?
-    //         },
-    //         MessageType::Update => {
-    //             self.handle_update_message(tcp_stream, tsbuf, bgp_proc).await?
-    //         },
-    //         MessageType::Notification => {
-    //             crate::messages::notification::handle_notification_message(tcp_stream, tsbuf, bgp_proc).await?;
-    //         },
-    //         MessageType::Keepalive => {
-    //             handle_keepalive_message(tcp_stream).await?
-    //         },
-    //         MessageType::RouteRefresh => {
-    //             // TODO handle route refresh
-    //             crate::messages::route_refresh::handle_route_refresh_message(tcp_stream, tsbuf)?
-    //         }
-    //     }
-    //     Ok(())
-    // }
-
 
 
 
@@ -1475,7 +1422,6 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
     // max bgp msg size should never exceed 4096
     // TODO determine if we want to honor the above rule or not, if not, how should we handle it
     let mut tsbuf: Vec<u8> = Vec::with_capacity(65536);
-    //let tcp_stream = ts;
 
     let (mut tcp_read, mut tcp_write) = tcp_stream.into_split();
     let mut tcp_read_stream: Option<OwnedReadHalf> = Some(tcp_read);
@@ -1528,16 +1474,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
             }
         }
 
-        // the write half is moved inside the func, whereas the read half is returned here and move it into the correct var
-        // if let Some((new_tcp_read_stream, new_tcp_write_stream)) = neighbor_arc.lock().await.reestablish_neighbor_streams() {
-        //     println!("");
-        //     tcp_read_stream = Some(new_tcp_read_stream);
-        //
-        //     neighbor_arc.lock().await.generate_event(Event::TcpCRAcked);
-        // }
-
         neighbor_arc.lock().await.recv_routes_from_bgp_proc().await;
-        //recv_routes_from_bgp_proc(&neighbor_arc).await;
 
 
         tsbuf.clear();
@@ -1590,6 +1527,8 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
                     },
                     Err(e) => {
                         if e.kind() == io::ErrorKind::WouldBlock {
+                            // Tested and this rarely fires so it's working as expected
+                            // println!("ErrorKind::WouldBlock in run_neighbor_loop");
                             continue;
                         }
                         else {
