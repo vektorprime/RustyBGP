@@ -41,6 +41,7 @@ pub enum MessageError {
     HelloTimeLessThanOne,
     HoldTimeLessThanThreeAndNotZero,
     BadAttributeTypeCode,
+    OpenMessageLenAndIdxMismatch,
     UpdateMessageLenAndIdxMismatch,
     MissingWithdrawnRoutes,
     MessageLenTooBig,

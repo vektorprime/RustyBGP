@@ -22,7 +22,7 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
     let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
 
     if message_len as usize != tsbuf.len() {
-        return Err(MessageError::UpdateMessageLenAndIdxMismatch);
+        return Err(MessageError::OpenMessageLenAndIdxMismatch);
     }
     // let mut message_header = MessageHeader::new(MessageType::Open, message_len);
     // message_header.length = message_len;
@@ -44,7 +44,7 @@ pub fn extract_open_message(tsbuf: &Vec<u8>) -> Result<OpenMessage, MessageError
 
     let opt_param_len = extract_u8_from_bytes(tsbuf, 28, 29)?;
     if opt_param_len as usize != tsbuf.len() - 29 {
-        return Err(MessageError::UpdateMessageLenAndIdxMismatch);
+        return Err(MessageError::OpenMessageLenAndIdxMismatch);
     }
     let mut opt_curr_idx = 29;
     //let opt_start_idx = 29;
