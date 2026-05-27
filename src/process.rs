@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, broadcast};
 use tokio::sync::mpsc::{Receiver, Sender};
 use crate::config::*;
 use crate::errors::*;
@@ -222,9 +222,10 @@ impl BGPProcess {
         BGPProcess::populate_local_rib_from_config_arc(&bgp_proc_arc).await;
         let all_neighbors_channels_arc = BGPProcess::init_process_channels();
         let (tx_channel_watcher, rx_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(1);
-        let mut all_neighbors = BGPProcess::populate_neighbors_from_config(&bgp_proc, &all_neighbors_channels_arc, tx_channel_watcher).await;
+        let (tx_all_event_channel_watcher, rx_all_event_channel_watcher) = broadcast::channel::<ChannelWatcherMessage>(1);
+        let mut all_neighbors = BGPProcess::populate_neighbors_from_config(&bgp_proc, &all_neighbors_channels_arc, tx_channel_watcher, tx_all_event_channel_watcher.clone()).await;
         BGPProcess::run_recv_message_channel_loop(Arc::clone(&bgp_proc), Arc::clone(&all_neighbors_channels_arc), rx_channel_watcher).await;
-        BGPProcess::generate_event_for_all_neighbors(&mut all_neighbors, Event::AutomaticStartWithPassiveTcpEstablishment).await;
+        BGPProcess::generate_event_for_all_neighbors(&mut all_neighbors, Event::AutomaticStartWithPassiveTcpEstablishment, tx_all_event_channel_watcher.clone()).await;
         //
 
 
@@ -271,12 +272,14 @@ impl BGPProcess {
                         }
                     };
                     println!("Extracted neighbor from hashmap");
+                    let (tx_event_channel_watcher, rx_event_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(5);
+                    neighbor.tx_event_channel_watcher = Some(tx_event_channel_watcher);
                     neighbor.generate_event(Event::TcpCRAcked);
                     println!("Generated Event::TcpCRAcked");
                     tokio::spawn(async move {
                         println!("Moving neighbor to async task and executing run_neighbor_loop");
                         // get the neighbor and pass the tcp conn
-                        if let Err(e) = neighbors::run_neighbor_loop(tcp_stream, neighbor, peer_ip).await {
+                        if let Err(e) = neighbors::run_neighbor_loop(tcp_stream, neighbor, peer_ip, rx_event_channel_watcher).await {
                             println!("Error: Unable to continue run() for neighbor {:#?} - {:#?}", peer_ip, e);
                         }
                     });
@@ -288,7 +291,8 @@ impl BGPProcess {
         }
     }
 
-    pub async fn populate_neighbors_from_config(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels_arc: &Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>, tx_channel_watcher: Sender<ChannelWatcherMessage>) -> HashMap<Ipv4Addr, Neighbor> {
+    pub async fn populate_neighbors_from_config(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels_arc: &Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>,
+                                                tx_channel_watcher: Sender<ChannelWatcherMessage>, tx_all_event_channel_watcher: broadcast::Sender<ChannelWatcherMessage>) -> HashMap<Ipv4Addr, Neighbor> {
         // This function is dual purpose, return all_neighbors (who we added tx and rx channels to) + add channels to all_neighbors_channels_arc (for us to tx and rx messages from neighbor)
         let bgp_proc = bgp_proc_arc.lock().await;
         let mut all_neighbors = HashMap::new();
@@ -344,11 +348,12 @@ impl BGPProcess {
     }
 
 
-    pub async fn generate_event_for_all_neighbors(all_neighbors: &mut HashMap<Ipv4Addr, Neighbor>, event: Event) {
+    pub async fn generate_event_for_all_neighbors(all_neighbors: &mut HashMap<Ipv4Addr, Neighbor>, event: Event, tx_all_event_channel_watcher: broadcast::Sender<ChannelWatcherMessage>) {
         println!("Generating event {:#?} for all neighbors", event);
         for n in all_neighbors {
             n.1.events.push_back(event.clone());
         }
+        tx_all_event_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).unwrap();
     }
 
 

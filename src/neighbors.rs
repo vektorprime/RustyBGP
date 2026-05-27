@@ -12,8 +12,8 @@ use std::mem::discriminant;
 use tokio::net::tcp::*;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc, broadcast};
+use tokio::sync::mpsc::{Receiver, Sender};
 use crate::sessions::*;
 use crate::finite_state_machine::*;
 use crate::timers::*;
@@ -66,6 +66,10 @@ pub struct Neighbor {
     pub adj_rib_out: HashMap<NLRI, RouteV4>,
     pub channel: NeighborChannel,
     pub tx_channel_watcher: Sender<ChannelWatcherMessage>,
+    // for the generate_events msg
+    pub tx_event_channel_watcher: Option<Sender<ChannelWatcherMessage>>,
+    // for the generate all events msg can't use this or else it will lock
+    // pub rx_all_event_channel_watcher: broadcast::Receiver<ChannelWatcherMessage>,
     //pub tcp_read_stream: Option<OwnedReadHalf>,
     pub tcp_write_stream: Option<OwnedWriteHalf>,
     pub negotiated_capabilities: Option<Vec<Capability>>,
@@ -82,13 +86,27 @@ pub async fn run_timer_loop(neighbor_arc: Arc<Mutex<Neighbor>>, peer_ip: Ipv4Add
     });
 }
 
-pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, tcp_channel_tx: mpsc::Sender<TCPChannelMessage>) {
+pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, tcp_channel_tx: mpsc::Sender<TCPChannelMessage>, rx_event_channel_watcher: mpsc::Receiver<ChannelWatcherMessage>) {
+    // The first event is the Automatic start from BGPProcess::generate_event_for_all_neighbors, the rest need to be async
+    // I couldn't have generate_event_for_all_neigbhors be provide a broadcast receiver because it would block but also would ruin the state of other neighbors
+    {
+        let mut neighbor = neighbor_arc.lock().await;
+        while let Some(event) = neighbor.events.pop_front() {
+            if let Err(e) = neighbor.handle_event(event, &tcp_channel_tx).await {
+                println!("Error: Unable to handle event {:#?}, skipping", e);
+            }
+        }
+    }
+    // neighbors should be up now so we can move  into task
     tokio::spawn( async move {
+        let mut watcher = rx_event_channel_watcher;
         loop {
-            let mut neighbor = neighbor_arc.lock().await;
-            while let Some(event) = neighbor.events.pop_front() {
-                if let Err(e) = neighbor.handle_event(event, &tcp_channel_tx).await {
-                    println!("Error: Unable to handle event {:#?}, skipping", e);
+            if let Some(ChannelWatcherMessage::MessageWaiting) = watcher.recv().await {
+                let mut neighbor = neighbor_arc.lock().await;
+                while let Some(event) = neighbor.events.pop_front() {
+                    if let Err(e) = neighbor.handle_event(event, &tcp_channel_tx).await {
+                        println!("Error: Unable to handle event {:#?}, skipping", e);
+                    }
                 }
             }
         }
@@ -127,7 +145,8 @@ impl Neighbor {
         Ok(())
     }
 
-    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: GlobalSettings, neighbor_channel: NeighborChannel, tx_channel_watcher: Sender<ChannelWatcherMessage>) -> Result<Neighbor, MessageError> {
+    pub fn new(ip: Ipv4Addr, as_num: AS, keepalive_time_sec: u16, hold_time_sec: u16, peer_type: PeerType, settings: GlobalSettings,
+               neighbor_channel: NeighborChannel, tx_channel_watcher: Sender<ChannelWatcherMessage>) -> Result<Neighbor, MessageError> {
         if keepalive_time_sec < 1 {
             return Err(MessageError::HelloTimeLessThanOne);
         }
@@ -155,6 +174,7 @@ impl Neighbor {
             adj_rib_out: HashMap::new(),
             channel: neighbor_channel,
             tx_channel_watcher,
+            tx_event_channel_watcher: None,
             //tcp_read_stream: None,
             tcp_write_stream: None,
             negotiated_capabilities: None,
@@ -1258,6 +1278,11 @@ impl Neighbor {
     }
 
     pub fn generate_event(&mut self, event: Event) {
+        // todo handle error or switch to regular mpsc
+        match self.tx_event_channel_watcher.as_ref() {
+            Some(tx) => {tx.try_send(ChannelWatcherMessage::MessageWaiting).unwrap()}
+            None => {println!("generate_event failed for {:?}, tx_event_channel_watcher is none", event)}
+        }
         self.events.push_back(event);
     }
 
@@ -1413,7 +1438,7 @@ pub async fn send_tcp_drop_signal_to_neighbor_loop(tcp_channel_tx: &Sender<TCPCh
 //     }
 // }
 
-pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighbor: Neighbor, peer_ip: Ipv4Addr ) -> Result<(), BGPError> {
+pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighbor: Neighbor, peer_ip: Ipv4Addr, rx_event_channel_watcher: Receiver<ChannelWatcherMessage>) -> Result<(), BGPError> {
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
 
     // setup channel to be used for signaling TCP dropping
@@ -1434,7 +1459,9 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
     run_timer_loop(Arc::clone(&neighbor_arc), peer_ip).await;
 
     // pops and handles events
-    run_event_loop(Arc::clone(&neighbor_arc), tcp_channel_tx).await;
+
+    //rx_event_channel_watcher comes from bgp run_process_loop because it's needed there due to a generate_event call
+    run_event_loop(Arc::clone(&neighbor_arc), tcp_channel_tx, rx_event_channel_watcher).await;
 
     let mut is_tcp_stream_active = true;
 

@@ -13,7 +13,7 @@ pub struct NeighborChannel {
     //pub is_active: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ChannelWatcherMessage {
     MessageWaiting,
     NoMessageWaiting
