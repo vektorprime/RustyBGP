@@ -1319,15 +1319,20 @@ impl Neighbor {
         Ok(())
     }
 
+    pub fn insert_routes_in_adj_rib_out(&mut self, route: RouteV4) {
+        self.adj_rib_out.insert(route.nlri.clone(), route);
+        self.generate_event(Event::SendUpdateMsg);
+    }
+
     pub async fn recv_routes_from_bgp_proc(&mut self) {
         while let Ok(ChannelMessage::Route(route)) = self.channel.rx.try_recv() {
+            // TODO move the as check into something more centralized
             // don't send an ebgp neighbor routes with their own AS, it wastes CPU cycles for the receiver since they will reject that route
             if self.peer_type == PeerType::External && route.as_path.as_path_segment.as_list.contains(&self.as_num) {
                 println!("BGP proc will not transfer route {:#?} to neighbor adj-rib-out because the peer is External and the route contains the peer's AS", route);
                 continue;
             }
-            self.adj_rib_out.insert(route.nlri.clone(), route);
-            self.generate_event(Event::SendUpdateMsg);
+            self.insert_routes_in_adj_rib_out(route);
         }
     }
 
