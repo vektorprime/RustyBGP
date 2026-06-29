@@ -55,6 +55,7 @@ pub struct BGPProcess {
     pub configured_neighbors: Vec<NeighborConfig>,
     pub configured_networks: Vec<NetAdvertisementsConfig>,
     // TODO changes to loc-rib generate events to all neighbors to send update
+    pub adj_rib_in: HashMap<NLRI, Vec<RouteV4>>,
     pub local_rib: HashMap<NLRI, Vec<RouteV4>>,
     //pub neighbors_channels: HashMap<Ipv4Addr, NeighborChannel>, // moved to it's own var so we can lock it separately from the bgp proc
 }
@@ -86,9 +87,62 @@ impl BGPProcess {
             //neighbors: HashMap::new(),
             configured_neighbors: config.neighbors_config,
             configured_networks: config.net_advertisements_config,
+            adj_rib_in: HashMap::new(),
             local_rib: HashMap::new(),
             //neighbors_channels: HashMap::new(),
         }
+    }
+
+    pub fn calc_best_path() {
+        // TODO signal new routes in adj rib in so we can trigger this func, maybe add a delay so we receive all routes before running this func
+        // since our router will be control-plane only, there will be some differences in between us, Cisco, and the RFC implementations
+        // e.g. idc about next-hop being reachable
+
+        // we need to process bgp adj rib in and store in bgp local rib
+        
+        
+        
+        // if ebgp
+        // check if our AS is in the path
+
+
+        // run best path:
+        //     invoke when we receive an update with a new, replacement, or withdrawn route
+        // find all routes to the destination to compare them
+
+        // check for highest weight, default is 0 (weight is locally significant) - need to introduce
+
+        // prefer highest local pref
+        // if learned from ibgp peer
+        // use that local pref
+        // if learned from ebgp peer
+        // use the default local pref configured
+
+        // prefer route that this router originated (order network or redist > aggregate)
+
+
+        // prefer shortest AS path
+        // if AS_SET present that counts as 1
+        // if "bgp bestpath as-path ignore" this step is skipped - cisco specific
+        // if confed as set consider as 0
+
+        // prefer lowest origin number ( order IGP, EGP, incomplete where IGP is network or aggregate commands, egp deprecated, incomplete redisted)
+
+
+        // if routes are from same neighbor AS, then prefer lowest MED, missing MED means 0, ignore confed sub as
+        // if ibgp peer sent you this route
+        // if they didn't originate it
+        // consider the external AS in the AS path for comparing MED.
+        // if they originated it or aggregated it
+        // then use the local AS for comparing MED
+
+        // prefer ebgp over ibgp
+
+        // prefer lowest BGP RID
+
+        // prefer lowest BGP peer IP
+
+
     }
 
     pub fn get_neighbor_config(&self, ipv4addr: Ipv4Addr) -> Result<NeighborConfig, NeighborError> {
@@ -201,7 +255,7 @@ impl BGPProcess {
             let aggregator = None;
             let new_route = RouteV4::new(nlri.clone(), origin, as_path, next_hop , local_pref, med, atomic_aggregate, aggregator);
 
-            self.local_rib.insert(nlri, vec![new_route]);
+            self.adj_rib_in.insert(nlri, vec![new_route]);
         }
     }
 
@@ -377,22 +431,22 @@ impl BGPProcess {
                                     {
                                         let nlri = route.nlri.clone();
                                         let mut bgp_proc = bgp_proc_arc.lock().await;
-                                        match bgp_proc.local_rib.get_mut(&nlri) {
+                                        match bgp_proc.adj_rib_in.get_mut(&nlri) {
                                             Some(route_paths) => {
                                                 route_paths.push(route);
                                             }
                                             None => {
-                                                bgp_proc.local_rib.insert(nlri, vec![route]);
+                                                bgp_proc.adj_rib_in.insert(nlri, vec![route]);
                                             }
                                         }
-                                        println!("Adding route to BGP local RIB");
-                                        println!("Current BGP local RIB is {:#?}", bgp_proc.local_rib);
+                                        println!("Adding route to BGP ADJ RIB IN");
+                                        println!("Current BGP ADJ RIB IN is {:#?}", bgp_proc.adj_rib_in);
                                     }
                                 },
                                 ChannelMessage::WithdrawRoute(nlri_vec) => {
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
                                     for nlri in nlri_vec {
-                                        println!("Removing route from BGP local RIB");
+                                        println!("Removing route from BGP Local RIB");
                                         if let None =  bgp_proc.local_rib.remove(&nlri) {
                                             println!("Attempted to remove {:#?} from the BGP local RIB but was unable to find the route", nlri);
                                         }
@@ -405,7 +459,7 @@ impl BGPProcess {
                                 ChannelMessage::NeighborUp => {
                                     // Allow the BGP proc to send messages (routes) to the Neighbor task
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
-                                    for (_nlri, route_vec) in &bgp_proc.local_rib {
+                                    for (_nlri, route_vec) in &bgp_proc.adj_rib_in {
                                         println!("Received ChannelMessage::NeighborUp, sending route_vec - {:#?}", route_vec);
                                         route_channel.send_route_vec(route_vec).await;
                                     }
