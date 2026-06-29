@@ -457,8 +457,8 @@ impl MultiExitDisc {
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct LocalPref {
-    category: Category,
-    value: u32, // 4 bytes
+    pub category: Category,
+    pub value: u32, // 4 bytes
 }
 
 impl LocalPref {

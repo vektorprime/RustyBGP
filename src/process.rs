@@ -417,7 +417,49 @@ impl BGPProcess {
         // when at least one neighbor has a message, resume the task
         tokio::spawn( async move {
             let mut watcher = rx_channel_watcher;
+            //let mut path_changed = false;
+            let mut routes_need_best_path_calc: Vec<NLRI> = Vec::new();
             loop {
+                if !routes_need_best_path_calc.is_empty() {
+                    // TODO calculate best path if path changed
+                    // go through every nlri and find the best metrics
+                    let mut bgp_proc = bgp_proc_arc.lock().await;
+                    while let Some(rt) = routes_need_best_path_calc.pop() {
+                        if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.get(&rt) {
+                            let mut best_path: Option<RouteV4> = None;
+                            for path in all_paths_for_rt {
+                                if best_path.is_none() {
+                                    best_path = Some(path.clone());
+                                } else {
+                                    // TODO compare
+                                    // the eBGP ASN check was already done in the neighbor side, maybe we should move it here but I have
+                                    // no way of knowing which neighbor added the route and I don't feel like refactoring a new Option var right now
+                                    let path_local_pref = if path.local_pref.is_some() {
+                                            path.local_pref.as_ref().unwrap().value }
+                                        else {
+                                            bgp_proc.global_settings.default_local_preference
+                                    };
+
+                                    let best_path_local_pref = if best_path.as_ref().unwrap().local_pref.is_some() {
+                                        best_path.as_ref().unwrap().local_pref.unwrap().value }
+                                    else {
+                                        bgp_proc.global_settings.default_local_preference
+                                    };
+                                    // unwrapping all of those was really fucking annoying
+                                    if  best_path_local_pref > path_local_pref {
+                                        // no need to change it
+                                    }
+                                    else if path_local_pref > best_path_local_pref {
+                                        best_path = Some(path.clone());
+                                    }
+                                    else {
+                                        // continue
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(ChannelWatcherMessage::MessageWaiting) = watcher.recv().await {
                     let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
                     // TODO check the channel and unlock the bgp Arc Mutex if we need to modify the loc_rib
@@ -425,11 +467,12 @@ impl BGPProcess {
                         while let Ok(msg) = route_channel.rx.try_recv() {
                             match msg {
                                 ChannelMessage::Route(route) => {
-                                    // TODO handle route here so that we go calc. best path and add it to the loc_rib
-                                    // for now i will just test adding it to the bgp loc_rib
+                                    // for now, I will just test adding it to the bgp loc_rib
                                     // if an entry for the NLRI exists, add the route path too it don't overwrite
                                     {
                                         let nlri = route.nlri.clone();
+                                        // store route here so we know which to run bestpath for later
+                                        routes_need_best_path_calc.push(nlri.clone());
                                         let mut bgp_proc = bgp_proc_arc.lock().await;
                                         match bgp_proc.adj_rib_in.get_mut(&nlri) {
                                             Some(route_paths) => {
@@ -442,16 +485,22 @@ impl BGPProcess {
                                         println!("Adding route to BGP ADJ RIB IN");
                                         println!("Current BGP ADJ RIB IN is {:#?}", bgp_proc.adj_rib_in);
                                     }
+                                    //path_changed = true;
                                 },
                                 ChannelMessage::WithdrawRoute(nlri_vec) => {
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
                                     for nlri in nlri_vec {
+                                        // store route here so we know which to run bestpath for later
+                                        routes_need_best_path_calc.push(nlri.clone());
+                                        // continue with withdraw
                                         println!("Removing route from BGP Local RIB");
                                         if let None =  bgp_proc.local_rib.remove(&nlri) {
                                             println!("Attempted to remove {:#?} from the BGP local RIB but was unable to find the route", nlri);
                                         }
                                     }
+                                    // TODO trigger sending a withdraw message
                                     println!("Current BGP Local RIB is {:#?}", bgp_proc.local_rib);
+                                    //path_changed = true;
                                 }
                                 // ChannelMessage::NeighborDown => {
                                 //     // prevent the BGP proc from using the TX channel until we get a NeighborUp
