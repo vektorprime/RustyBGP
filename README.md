@@ -14,9 +14,12 @@ What is implemented:
 - Optional parameters for neighbors (capabilities like AS4, and other address families)
 - Receiving and understanding (but not doing anything with) Notifications
 
+What's in progress:
+-  Best Path Calc.
+
+
 What isn't implemented yet:
 -  GUI
--  Best Path Calc.
 -  Processing of BGP Notification
 -  Handling of route refresh
 -  Other address families (v6 or vpn)
