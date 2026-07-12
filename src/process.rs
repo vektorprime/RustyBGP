@@ -409,7 +409,23 @@ impl BGPProcess {
         }
     }
 
+    pub fn is_candidate_local_pref_better(curr_best_path: &RouteV4, candidate_best_path: &RouteV4, def_local_pref: u32) -> bool {
+        let candidate_path_local_pref = if candidate_best_path.local_pref.is_some() {
+            candidate_best_path.local_pref.as_ref().unwrap().value }
+        else {
+            def_local_pref
+        };
 
+        let best_path_local_pref = if curr_best_path.local_pref.is_some() {
+            curr_best_path.local_pref.unwrap().value }
+        else {
+            def_local_pref
+        };
+        if candidate_path_local_pref > best_path_local_pref {
+            return true
+        }
+        false
+    }
 
     pub async fn run_recv_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>, rx_channel_watcher: Receiver<ChannelWatcherMessage>) {
         // TODO need to refactor this so we don't loop to unlock the all_neighbors_channels_arc
@@ -427,30 +443,18 @@ impl BGPProcess {
                     while let Some(rt) = routes_need_best_path_calc.pop() {
                         if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.get(&rt) {
                             let mut best_path: Option<RouteV4> = None;
-                            for path in all_paths_for_rt {
-                                if best_path.is_none() {
-                                    best_path = Some(path.clone());
+                            let mut best_path_exists = if best_path.is_none() {false} else {true};
+                            for candidate_path in all_paths_for_rt {
+                                if !best_path_exists {
+                                    best_path = Some(candidate_path.clone());
                                 } else {
+                                    let curr_best_path = best_path.as_ref().unwrap();
                                     // TODO compare
                                     // the eBGP ASN check was already done in the neighbor side, maybe we should move it here but I have
                                     // no way of knowing which neighbor added the route and I don't feel like refactoring a new Option var right now
-                                    let path_local_pref = if path.local_pref.is_some() {
-                                            path.local_pref.as_ref().unwrap().value }
-                                        else {
-                                            bgp_proc.global_settings.default_local_preference
-                                    };
 
-                                    let best_path_local_pref = if best_path.as_ref().unwrap().local_pref.is_some() {
-                                        best_path.as_ref().unwrap().local_pref.unwrap().value }
-                                    else {
-                                        bgp_proc.global_settings.default_local_preference
-                                    };
-                                    // unwrapping all of those was really fucking annoying
-                                    if  best_path_local_pref > path_local_pref {
-                                        // no need to change it
-                                    }
-                                    else if path_local_pref > best_path_local_pref {
-                                        best_path = Some(path.clone());
+                                    if  BGPProcess::is_candidate_local_pref_better(&curr_best_path, &candidate_path, bgp_proc.global_settings.default_local_preference) {
+                                        best_path = Some(candidate_path.clone());
                                     }
                                     else {
                                         // continue
