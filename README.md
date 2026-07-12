@@ -1,6 +1,6 @@
 RustyBGP is my first attempt at routing protocol written in, you guessed it, Rust.
 
-What is implemented:
+**What is implemented:**
 
 - Processing of the following BGP messages: Open, Keepalive, Updates
 - Neighborship comes up
@@ -14,11 +14,13 @@ What is implemented:
 - Optional parameters for neighbors (capabilities like AS4, and other address families)
 - Receiving and understanding (but not doing anything with) Notifications
 
-What's in progress:
+**What's in progress:**
+
 -  Best Path Calc.
 
 
-What isn't implemented yet:
+**What isn't implemented yet:**
+
 -  GUI
 -  Processing of BGP Notification
 -  Handling of route refresh
