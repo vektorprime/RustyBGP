@@ -64,7 +64,7 @@ pub struct Neighbor {
     pub adj_rib_in: HashMap<NLRI, RouteV4>,
     // TODO adj-rib-out filters routes before they are sent to neighbor, generate event to send update
     pub adj_rib_out: HashMap<NLRI, RouteV4>,
-    pub channel: NeighborChannel,
+    pub proc_channel: NeighborChannel,
     pub tx_channel_watcher: Sender<ChannelWatcherMessage>,
     // for the generate_events msg
     pub tx_event_channel_watcher: Option<Sender<ChannelWatcherMessage>>,
@@ -172,7 +172,7 @@ impl Neighbor {
             events: VecDeque::new(),
             adj_rib_in: HashMap::new(),
             adj_rib_out: HashMap::new(),
-            channel: neighbor_channel,
+            proc_channel: neighbor_channel,
             tx_channel_watcher,
             tx_event_channel_watcher: None,
             //tcp_read_stream: None,
@@ -190,7 +190,7 @@ impl Neighbor {
                 // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
             }
             
-            self.channel.withdraw_route(withdrawn_routes, &self.tx_channel_watcher).await;
+            self.proc_channel.withdraw_route(withdrawn_routes, &self.tx_channel_watcher).await;
             
             Ok(())
         }
@@ -199,7 +199,7 @@ impl Neighbor {
         }
     }
 
-    pub async fn process_routes_from_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
+    pub async fn process_routes_from_update_message(&mut self, update_message: UpdateMessage) -> Result<(), MessageError> {
 
         if let Some(nlri_coll) = update_message.nlri {
             let path_attributes = update_message.path_attributes.ok_or_else(|| MessageError::MissingPathAttributes)?;
@@ -270,7 +270,7 @@ impl Neighbor {
                 //self.routes_v4.push(rt);
                 self.adj_rib_in.insert(nlri.clone(), rt.clone());
                 // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
-                self.channel.send_route(rt, &self.tx_channel_watcher).await;
+                self.proc_channel.send_route(rt, &self.tx_channel_watcher).await;
             }
             Ok(())
         }
@@ -955,7 +955,7 @@ impl Neighbor {
                         // TODO Need to confirm that we will always receive a Keepalive on neighbor coming up even if holdtime is 0
                         self.fsm.state = State::Established;
                         println!("Moving to {:#?}", self.fsm.state);
-                        self.channel.bring_up(&self.tx_channel_watcher).await?;
+                        self.proc_channel.bring_up(&self.tx_channel_watcher).await?;
                         Ok(())
                     },
                     Event::ConnectRetryTimerExpires | Event::DelayOpenTimerExpires | Event::IdleHoldTimerExpires |
@@ -1121,7 +1121,7 @@ impl Neighbor {
                             self.withdraw_routes_from_message(msg.clone()).await?
                         }
                         else if msg.nlri.is_some() {
-                            self.process_routes_from_message(msg.clone()).await?;
+                            self.process_routes_from_update_message(msg.clone()).await?;
                         }
                         else {
                             println!("WARNING: msg.nlri and msg.withdrawn_routes are both None in Event::UpdateMsg, likely a parsing issue or fuzzing");
@@ -1240,7 +1240,7 @@ impl Neighbor {
             return Err(NeighborError::NeighborIPNotEstablished.into())
         }
         let update_message = extract_update_message(tsbuf, &self.negotiated_capabilities)?;
-        self.process_routes_from_message(update_message).await?;
+        self.process_routes_from_update_message(update_message).await?;
 
         Ok(())
     }
@@ -1325,9 +1325,9 @@ impl Neighbor {
     }
 
     pub async fn recv_routes_from_bgp_proc(&mut self) {
-        while let Ok(ChannelMessage::Route(route)) = self.channel.rx.try_recv() {
+        while let Ok(ChannelMessage::Route(route)) = self.proc_channel.rx.try_recv() {
             // TODO move the as check into something more centralized
-            // don't send an ebgp neighbor routes with their own AS, it wastes CPU cycles for the receiver since they will reject that route
+            // // don't send an ebgp neighbor routes with their own AS, it wastes CPU cycles for the receiver since they will reject that route
             if self.peer_type == PeerType::External && route.as_path.as_path_segment.as_list.contains(&self.as_num) {
                 println!("BGP proc will not transfer route {:#?} to neighbor adj-rib-out because the peer is External and the route contains the peer's AS", route);
                 continue;
@@ -1338,7 +1338,7 @@ impl Neighbor {
 
     pub fn reestablish_neighbor_streams(&mut self) -> Option<(OwnedReadHalf,OwnedWriteHalf)> {
         println!("in reestablish_neighbor_streams");
-        if let Some(new_tcp_stream) = self.channel.recv_tcp_conn_from_bgp_proc() {
+        if let Some(new_tcp_stream) = self.proc_channel.recv_tcp_conn_from_bgp_proc() {
             let (tcp_r_stream, tcp_wr_stream) = new_tcp_stream.into_split();
             println!("Got new TCP stream, splitting into Read and Write halves");
             return Some((tcp_r_stream, tcp_wr_stream))

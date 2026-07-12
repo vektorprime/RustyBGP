@@ -161,8 +161,8 @@ pub enum Category {
 }
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Origin {
-    category: Category,
-    origin_type: OriginType
+    pub category: Category,
+    pub origin_type: OriginType
 }
 
 impl Origin {
@@ -457,8 +457,8 @@ impl MultiExitDisc {
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct LocalPref {
-    category: Category,
-    value: u32, // 4 bytes
+    pub category: Category,
+    pub value: u32, // 4 bytes
 }
 
 impl LocalPref {
