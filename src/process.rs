@@ -47,6 +47,12 @@ pub struct GlobalSettings {
     pub optional_parameters: OptionalParameters
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum BestPathResult {
+    CandidatePath,
+    CurrentPath,
+    Tie,
+}
 
 #[derive(Debug)]
 pub struct BGPProcess {
@@ -409,22 +415,64 @@ impl BGPProcess {
         }
     }
 
-    pub fn is_candidate_local_pref_better(curr_best_path: &RouteV4, candidate_best_path: &RouteV4, def_local_pref: u32) -> bool {
+    fn compare_route_local_pref(curr_best_path: &RouteV4, candidate_best_path: &RouteV4, def_local_pref: u32) -> BestPathResult {
+        // prefer higher local pref
         let candidate_path_local_pref = if candidate_best_path.local_pref.is_some() {
             candidate_best_path.local_pref.as_ref().unwrap().value }
         else {
             def_local_pref
         };
 
-        let best_path_local_pref = if curr_best_path.local_pref.is_some() {
+        let curr_best_path_local_pref = if curr_best_path.local_pref.is_some() {
             curr_best_path.local_pref.unwrap().value }
         else {
             def_local_pref
         };
-        if candidate_path_local_pref > best_path_local_pref {
-            return true
+
+        if candidate_path_local_pref == curr_best_path_local_pref {
+            return BestPathResult::Tie
         }
-        false
+
+        if candidate_path_local_pref > curr_best_path_local_pref {
+            return BestPathResult::CandidatePath
+        }
+
+        BestPathResult::CurrentPath
+    }
+
+    fn compare_route_as_path(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
+        // prefer shortest AS PATH
+        // AS SET counts as 1
+        // confed counts as 0
+        // maybe I'll come back and do something for as-path ignore when/if I tackle multi-path
+        // TODO come back and handle multiple ASPathSegmentType objects here once I refactor that code.
+
+        // Right now, this assumes only one SegmentType can be present
+
+        let candidate_path_as_path_len = candidate_best_path.as_path.as_path_segment.number_of_as;
+        let curr_best_path_as_path_len = curr_best_path.as_path.as_path_segment.number_of_as;
+
+        if candidate_path_as_path_len == curr_best_path_as_path_len {
+            return BestPathResult::Tie
+        }
+        if candidate_path_as_path_len < curr_best_path_as_path_len {
+            return BestPathResult::CandidatePath
+        }
+        
+        BestPathResult::CurrentPath
+    }
+
+    fn compare_route_origin(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
+        // prefer in order: IGP, EGP, incomplete
+
+        if candidate_best_path.origin.origin_type == curr_best_path.origin.origin_type {
+            return BestPathResult::Tie
+        }
+        if candidate_best_path.origin.origin_type == OriginType::IGP {
+            return BestPathResult::CandidatePath
+        }
+
+        BestPathResult::CurrentPath
     }
 
     pub async fn run_recv_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>, rx_channel_watcher: Receiver<ChannelWatcherMessage>) {
@@ -443,7 +491,7 @@ impl BGPProcess {
                     while let Some(rt) = routes_need_best_path_calc.pop() {
                         if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.get(&rt) {
                             let mut best_path: Option<RouteV4> = None;
-                            let mut best_path_exists = if best_path.is_none() {false} else {true};
+                            let best_path_exists = if best_path.is_none() {false} else {true};
                             for candidate_path in all_paths_for_rt {
                                 if !best_path_exists {
                                     best_path = Some(candidate_path.clone());
@@ -453,12 +501,26 @@ impl BGPProcess {
                                     // the eBGP ASN check was already done in the neighbor side, maybe we should move it here but I have
                                     // no way of knowing which neighbor added the route and I don't feel like refactoring a new Option var right now
 
-                                    if  BGPProcess::is_candidate_local_pref_better(&curr_best_path, &candidate_path, bgp_proc.global_settings.default_local_preference) {
+                                    // TODO I think I will implement weight as an attribute because it's very useful
+
+                                    let local_pref_result = BGPProcess::compare_route_local_pref(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference);
+                                    if  local_pref_result == BestPathResult::CandidatePath {
                                         best_path = Some(candidate_path.clone());
+                                        continue;
+                                    } else if local_pref_result == BestPathResult::CurrentPath {
+                                        continue;
                                     }
-                                    else {
-                                        // continue
+
+                                    // not going to implement prefer locally originated (Cisco) or prefer lowest accumulated IGP route (Juniper)
+                                    let as_path_result = BGPProcess::compare_route_as_path(curr_best_path, candidate_path);
+                                    if as_path_result == BestPathResult::CandidatePath {
+                                        best_path = Some(candidate_path.clone());
+                                        continue;
+                                    } else if as_path_result == BestPathResult::CurrentPath {
+                                        continue;
                                     }
+
+
                                 }
                             }
                         }

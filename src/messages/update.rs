@@ -161,8 +161,8 @@ pub enum Category {
 }
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct Origin {
-    category: Category,
-    origin_type: OriginType
+    pub category: Category,
+    pub origin_type: OriginType
 }
 
 impl Origin {

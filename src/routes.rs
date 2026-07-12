@@ -81,7 +81,7 @@ impl TryFrom<String> for NLRI {
 pub struct RouteV4 {
     // route_cast: RouteCast,
     // Maybe at some point I'll try handling multicast routes once. It's pretty rare to need BGP's multicast AF.
-    // TODO Keep nlri here even though it's the key for the hashmap, it's useful
+    // Keep nlri here even though it's the key for the hashmap, it's useful
     pub nlri: NLRI,
     // mandatory
     pub origin: Origin,
