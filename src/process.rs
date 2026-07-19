@@ -465,14 +465,20 @@ impl BGPProcess {
     fn compare_route_origin(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
         // prefer in order: IGP, EGP, incomplete
 
-        if candidate_best_path.origin.origin_type == curr_best_path.origin.origin_type {
-            return BestPathResult::Tie
-        }
-        if candidate_best_path.origin.origin_type == OriginType::IGP {
-            return BestPathResult::CandidatePath
+        match (candidate_best_path.origin.origin_type, curr_best_path.origin.origin_type) {
+            (OriginType::IGP, OriginType::IGP) |
+            (OriginType::EGP, OriginType::EGP) |
+            (OriginType::Incomplete, OriginType::Incomplete) => BestPathResult::Tie,
+
+            (OriginType::IGP, OriginType::EGP) |
+            (OriginType::IGP, OriginType::Incomplete) |
+            (OriginType::EGP, OriginType::Incomplete) => BestPathResult::CandidatePath,
+
+            _ => BestPathResult::CurrentPath
+
         }
 
-        BestPathResult::CurrentPath
+        //BestPathResult::CurrentPath
     }
 
     pub async fn run_recv_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>, rx_channel_watcher: Receiver<ChannelWatcherMessage>) {
@@ -501,24 +507,57 @@ impl BGPProcess {
                                     // the eBGP ASN check was already done in the neighbor side, maybe we should move it here but I have
                                     // no way of knowing which neighbor added the route and I don't feel like refactoring a new Option var right now
 
-                                    // TODO I think I will implement weight as an attribute because it's very useful
+                                    // TODO I think I will implement weight as an attribute because it's very useful, just not now
+                                    //
 
-                                    let local_pref_result = BGPProcess::compare_route_local_pref(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference);
-                                    if  local_pref_result == BestPathResult::CandidatePath {
-                                        best_path = Some(candidate_path.clone());
-                                        continue;
-                                    } else if local_pref_result == BestPathResult::CurrentPath {
-                                        continue;
+                                    match BGPProcess::compare_route_local_pref(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference) {
+                                        BestPathResult::CandidatePath => {
+                                            best_path = Some(candidate_path.clone());
+                                            continue;
+                                        },
+                                        BestPathResult::CurrentPath => {
+                                            continue;
+                                        },
+                                        BestPathResult::Tie => {
+                                            // move on to next att.
+                                        }
                                     }
 
-                                    // not going to implement prefer locally originated (Cisco) or prefer lowest accumulated IGP route (Juniper)
-                                    let as_path_result = BGPProcess::compare_route_as_path(curr_best_path, candidate_path);
-                                    if as_path_result == BestPathResult::CandidatePath {
-                                        best_path = Some(candidate_path.clone());
-                                        continue;
-                                    } else if as_path_result == BestPathResult::CurrentPath {
-                                        continue;
+                                    // not going to implement prefer locally originated (Cisco) or prefer lowest accumulated IGP route (Juniper) for now
+
+                                    match BGPProcess::compare_route_as_path(curr_best_path, candidate_path) {
+                                        BestPathResult::CandidatePath => {
+                                            best_path = Some(candidate_path.clone());
+                                            continue;
+                                        },
+                                        BestPathResult::CurrentPath => {
+                                            continue;
+                                        },
+                                        BestPathResult::Tie => {
+                                            // move on to next att.
+                                        }
                                     }
+
+                                    match BGPProcess::compare_route_origin(curr_best_path, candidate_path) {
+                                        BestPathResult::CandidatePath => {
+                                            best_path = Some(candidate_path.clone());
+                                            continue;
+                                        },
+                                        BestPathResult::CurrentPath => {
+                                            continue;
+                                        },
+                                        BestPathResult::Tie => {
+                                            // move on to next att.
+                                        }
+                                    }
+
+                                    // TODO need to get the ibgp vs ebgp peer property on the route at some point, but not now
+                                    // if routes are from same neighbor AS, then prefer lowest MED, missing MED means 0, ignore confed sub as
+                                    // if ibgp peer sent you this route
+                                    // if they didn't originate it
+                                    // consider the external AS in the AS path for comparing MED
+                                    // if they originated it or aggregated it
+                                    // then use the local AS for comparing MED
 
 
                                 }
