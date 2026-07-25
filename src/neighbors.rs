@@ -38,7 +38,7 @@ pub enum IPType {
     V6
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum PeerType {
     Internal,
     External
@@ -88,7 +88,7 @@ pub async fn run_timer_loop(neighbor_arc: Arc<Mutex<Neighbor>>, peer_ip: Ipv4Add
 
 pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, tcp_channel_tx: mpsc::Sender<TCPChannelMessage>, rx_event_channel_watcher: mpsc::Receiver<ChannelWatcherMessage>) {
     // The first event is the Automatic start from BGPProcess::generate_event_for_all_neighbors, the rest need to be async
-    // I couldn't have generate_event_for_all_neigbhors be provide a broadcast receiver because it would block but also would ruin the state of other neighbors
+    // I couldn't have generate_event_for_all_neigbhors provide a broadcast receiver because it would block but also would ruin the state of other neighbors
     {
         let mut neighbor = neighbor_arc.lock().await;
         while let Some(event) = neighbor.events.pop_front() {
@@ -1326,12 +1326,6 @@ impl Neighbor {
 
     pub async fn recv_routes_from_bgp_proc(&mut self) {
         while let Ok(ChannelMessage::Route(route)) = self.proc_channel.rx.try_recv() {
-            // TODO move the as check into something more centralized
-            // // don't send an ebgp neighbor routes with their own AS, it wastes CPU cycles for the receiver since they will reject that route
-            if self.peer_type == PeerType::External && route.as_path.as_path_segment.as_list.contains(&self.as_num) {
-                println!("BGP proc will not transfer route {:#?} to neighbor adj-rib-out because the peer is External and the route contains the peer's AS", route);
-                continue;
-            }
             self.insert_routes_in_adj_rib_out(route);
         }
     }

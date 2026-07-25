@@ -372,11 +372,13 @@ impl BGPProcess {
                     let neighbors_channels = NeighborChannel {
                         rx: rx_from_neighbor,
                         tx: tx_to_neighbor,
+                        peer_type: peer_type.clone()
                         //is_active: true
                     };
                     let bgp_channel = NeighborChannel {
                         rx: rx_from_bgp,
                         tx: tx_to_bgp,
+                        peer_type: peer_type.clone()
                         //is_active: true,
                     };
                     // need to use a temp HashMap because we already borrowed bgp_proc as mutable
@@ -415,8 +417,20 @@ impl BGPProcess {
         }
     }
 
+    fn is_my_asn_in_ebgp_path(my_asn: u16, candidate_path: &RouteV4) -> Result<bool, BGPError> {
+
+        for candidate_as in &candidate_path.as_path.as_path_segment.as_list {
+            if my_asn == candidate_as.to_u16()? {
+                return Ok(true)
+            }
+        }
+        Ok(false)
+    }
+
     fn compare_route_local_pref(curr_best_path: &RouteV4, candidate_best_path: &RouteV4, def_local_pref: u32) -> BestPathResult {
         // prefer higher local pref
+        println!("comparing route local pref");
+
         let candidate_path_local_pref = if candidate_best_path.local_pref.is_some() {
             candidate_best_path.local_pref.as_ref().unwrap().value }
         else {
@@ -448,7 +462,7 @@ impl BGPProcess {
         // TODO come back and handle multiple ASPathSegmentType objects here once I refactor that code.
 
         // Right now, this assumes only one SegmentType can be present
-
+        println!("comparing route as path");
         let candidate_path_as_path_len = candidate_best_path.as_path.as_path_segment.number_of_as;
         let curr_best_path_as_path_len = curr_best_path.as_path.as_path_segment.number_of_as;
 
@@ -464,7 +478,7 @@ impl BGPProcess {
 
     fn compare_route_origin(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
         // prefer in order: IGP, EGP, incomplete
-
+        //println!("comparing route origin");
         match (candidate_best_path.origin.origin_type, curr_best_path.origin.origin_type) {
             (OriginType::IGP, OriginType::IGP) |
             (OriginType::EGP, OriginType::EGP) |
@@ -480,6 +494,25 @@ impl BGPProcess {
 
         //BestPathResult::CurrentPath
     }
+    fn compare_route_med(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
+        // if routes are from same neighbor AS, then prefer lowest MED, missing MED means 0, ignore confed sub as
+        // assume that we already checked the neighbor AS if we made it this far
+        // TODO Come back and check if we are populating default MED on routes before they get here
+        match (candidate_best_path.multi_exit_disc, curr_best_path.multi_exit_disc) {
+            (Some(candidate_med), Some(curr_best_path_med)) => {
+                if candidate_med.value > curr_best_path_med.value {
+                    return BestPathResult::CandidatePath
+                } else if candidate_med.value < curr_best_path_med.value {
+                    return BestPathResult::CurrentPath
+                }
+                BestPathResult::Tie
+            },
+            (Some(_), None) => BestPathResult::CandidatePath,
+            (None, Some(_)) => BestPathResult::CurrentPath,
+            (None, None) => BestPathResult::Tie
+        }
+
+    }
 
     pub async fn run_recv_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>, rx_channel_watcher: Receiver<ChannelWatcherMessage>) {
         // TODO need to refactor this so we don't loop to unlock the all_neighbors_channels_arc
@@ -488,13 +521,13 @@ impl BGPProcess {
         tokio::spawn( async move {
             let mut watcher = rx_channel_watcher;
             //let mut path_changed = false;
-            let mut routes_need_best_path_calc: Vec<NLRI> = Vec::new();
+            let mut routes_need_best_path_calc: Vec<(NLRI, PeerType)> = Vec::new();
             loop {
                 if !routes_need_best_path_calc.is_empty() {
                     // TODO calculate best path if path changed
                     // go through every nlri and find the best metrics
                     let mut bgp_proc = bgp_proc_arc.lock().await;
-                    while let Some(rt) = routes_need_best_path_calc.pop() {
+                    while let Some((rt, peer_type)) = routes_need_best_path_calc.pop() {
                         if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.get(&rt) {
                             let mut best_path: Option<RouteV4> = None;
                             let best_path_exists = if best_path.is_none() {false} else {true};
@@ -503,9 +536,23 @@ impl BGPProcess {
                                     best_path = Some(candidate_path.clone());
                                 } else {
                                     let curr_best_path = best_path.as_ref().unwrap();
-                                    // TODO compare
-                                    // the eBGP ASN check was already done in the neighbor side, maybe we should move it here but I have
-                                    // no way of knowing which neighbor added the route and I don't feel like refactoring a new Option var right now
+                                    // TODO finish compare
+
+                                    let my_asn = bgp_proc.global_settings.my_as;
+                                    if peer_type == PeerType::External {
+                                        match BGPProcess::is_my_asn_in_ebgp_path(my_asn, &candidate_path) {
+                                            Ok(result) => {
+                                                if result {
+                                                    println!("EBGP route has our ASN in path, skipping");
+                                                    continue;
+                                                }
+                                            },
+                                            Err (err) => {
+                                                println!("Unable to check if our ASN in ebgp path due to ASN parsing, skipping");
+                                                continue;
+                                            }
+                                        }
+                                    }
 
                                     // TODO I think I will implement weight as an attribute because it's very useful, just not now
                                     //
@@ -551,8 +598,21 @@ impl BGPProcess {
                                         }
                                     }
 
-                                    // TODO need to get the ibgp vs ebgp peer property on the route at some point, but not now
-                                    // if routes are from same neighbor AS, then prefer lowest MED, missing MED means 0, ignore confed sub as
+                                    if peer_type == PeerType::Internal {
+                                        match BGPProcess::compare_route_med(curr_best_path, candidate_path) {
+                                            BestPathResult::CandidatePath => {
+                                                best_path = Some(candidate_path.clone());
+                                                continue;
+                                            },
+                                            BestPathResult::CurrentPath => {
+                                                continue;
+                                            },
+                                            BestPathResult::Tie => {
+                                                // move on to next att.
+                                            }
+                                        }
+
+                                    }
                                     // if ibgp peer sent you this route
                                     // if they didn't originate it
                                     // consider the external AS in the AS path for comparing MED
@@ -565,6 +625,9 @@ impl BGPProcess {
                         }
                     }
                 }
+
+                // TODO Wow, I made this func way too long, need to break it up
+
                 if let Some(ChannelWatcherMessage::MessageWaiting) = watcher.recv().await {
                     let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
                     // TODO check the channel and unlock the bgp Arc Mutex if we need to modify the loc_rib
@@ -577,7 +640,7 @@ impl BGPProcess {
                                     {
                                         let nlri = route.nlri.clone();
                                         // store route here so we know which to run bestpath for later
-                                        routes_need_best_path_calc.push(nlri.clone());
+                                        routes_need_best_path_calc.push((nlri.clone(), route_channel.peer_type.clone()));
                                         let mut bgp_proc = bgp_proc_arc.lock().await;
                                         match bgp_proc.adj_rib_in.get_mut(&nlri) {
                                             Some(route_paths) => {
@@ -596,7 +659,7 @@ impl BGPProcess {
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
                                     for nlri in nlri_vec {
                                         // store route here so we know which to run bestpath for later
-                                        routes_need_best_path_calc.push(nlri.clone());
+                                        routes_need_best_path_calc.push((nlri.clone(), route_channel.peer_type.clone()));
                                         // continue with withdraw
                                         println!("Removing route from BGP Local RIB");
                                         if let None =  bgp_proc.local_rib.remove(&nlri) {

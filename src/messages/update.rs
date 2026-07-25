@@ -435,7 +435,7 @@ impl NextHop {
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub struct MultiExitDisc {
     category: Category,
-    value: u32, // 4 bytes
+    pub value: u32, // 4 bytes
 }
 
 impl MultiExitDisc {

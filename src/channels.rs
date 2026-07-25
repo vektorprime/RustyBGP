@@ -2,6 +2,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use crate::errors::EventError;
 use crate::routes::{RouteV4, NLRI};
+use crate::neighbors::PeerType;
 
 pub struct NeighborChannelWatcher {
 
@@ -10,6 +11,7 @@ pub struct NeighborChannelWatcher {
 pub struct NeighborChannel {
     pub tx: mpsc::Sender<ChannelMessage>,
     pub rx: mpsc::Receiver<ChannelMessage>,
+    pub peer_type: PeerType
     //pub is_active: bool,
 }
 
