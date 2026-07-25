@@ -554,65 +554,92 @@ impl BGPProcess {
                                         }
                                     }
 
+                                    let mut all_results = Vec::new();
+
                                     // TODO I think I will implement weight as an attribute because it's very useful, just not now
                                     //
 
-                                    match BGPProcess::compare_route_local_pref(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference) {
-                                        BestPathResult::CandidatePath => {
-                                            best_path = Some(candidate_path.clone());
-                                            continue;
-                                        },
-                                        BestPathResult::CurrentPath => {
-                                            continue;
-                                        },
-                                        BestPathResult::Tie => {
-                                            // move on to next att.
+                                    all_results.push(BGPProcess::compare_route_local_pref(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference));
+                                    all_results.push(BGPProcess::compare_route_as_path(curr_best_path, candidate_path));
+                                    all_results.push(BGPProcess::compare_route_origin(curr_best_path, candidate_path));
+                                    if peer_type == PeerType::Internal {
+                                        all_results.push(BGPProcess::compare_route_med(curr_best_path, candidate_path));
+
+                                    }
+                                    let mut move_to_next_route: bool = false;
+                                    for res in all_results {
+                                        match res {
+                                                BestPathResult::CandidatePath => {
+                                                    best_path = Some(candidate_path.clone());
+                                                    move_to_next_route = true;
+                                                },
+                                                BestPathResult::CurrentPath => {
+                                                    move_to_next_route = true;
+                                                },
+                                                BestPathResult::Tie => {
+                                                    // move on to next att.
+                                                }
                                         }
                                     }
+
+                                    if move_to_next_route { continue; }
+
+                                    // match BGPProcess::compare_route_local_pref(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference) {
+                                    //     BestPathResult::CandidatePath => {
+                                    //         best_path = Some(candidate_path.clone());
+                                    //         continue;
+                                    //     },
+                                    //     BestPathResult::CurrentPath => {
+                                    //         continue;
+                                    //     },
+                                    //     BestPathResult::Tie => {
+                                    //         // move on to next att.
+                                    //     }
+                                    // }
 
                                     // not going to implement prefer locally originated (Cisco) or prefer lowest accumulated IGP route (Juniper) for now
 
-                                    match BGPProcess::compare_route_as_path(curr_best_path, candidate_path) {
-                                        BestPathResult::CandidatePath => {
-                                            best_path = Some(candidate_path.clone());
-                                            continue;
-                                        },
-                                        BestPathResult::CurrentPath => {
-                                            continue;
-                                        },
-                                        BestPathResult::Tie => {
-                                            // move on to next att.
-                                        }
-                                    }
+                                    // match BGPProcess::compare_route_as_path(curr_best_path, candidate_path) {
+                                    //     BestPathResult::CandidatePath => {
+                                    //         best_path = Some(candidate_path.clone());
+                                    //         continue;
+                                    //     },
+                                    //     BestPathResult::CurrentPath => {
+                                    //         continue;
+                                    //     },
+                                    //     BestPathResult::Tie => {
+                                    //         // move on to next att.
+                                    //     }
+                                    // }
 
-                                    match BGPProcess::compare_route_origin(curr_best_path, candidate_path) {
-                                        BestPathResult::CandidatePath => {
-                                            best_path = Some(candidate_path.clone());
-                                            continue;
-                                        },
-                                        BestPathResult::CurrentPath => {
-                                            continue;
-                                        },
-                                        BestPathResult::Tie => {
-                                            // move on to next att.
-                                        }
-                                    }
+                                    // match BGPProcess::compare_route_origin(curr_best_path, candidate_path) {
+                                    //     BestPathResult::CandidatePath => {
+                                    //         best_path = Some(candidate_path.clone());
+                                    //         continue;
+                                    //     },
+                                    //     BestPathResult::CurrentPath => {
+                                    //         continue;
+                                    //     },
+                                    //     BestPathResult::Tie => {
+                                    //         // move on to next att.
+                                    //     }
+                                    // }
 
-                                    if peer_type == PeerType::Internal {
-                                        match BGPProcess::compare_route_med(curr_best_path, candidate_path) {
-                                            BestPathResult::CandidatePath => {
-                                                best_path = Some(candidate_path.clone());
-                                                continue;
-                                            },
-                                            BestPathResult::CurrentPath => {
-                                                continue;
-                                            },
-                                            BestPathResult::Tie => {
-                                                // move on to next att.
-                                            }
-                                        }
+                                    // if peer_type == PeerType::Internal {
+                                    //     match BGPProcess::compare_route_med(curr_best_path, candidate_path) {
+                                    //         BestPathResult::CandidatePath => {
+                                    //             best_path = Some(candidate_path.clone());
+                                    //             continue;
+                                    //         },
+                                    //         BestPathResult::CurrentPath => {
+                                    //             continue;
+                                    //         },
+                                    //         BestPathResult::Tie => {
+                                    //             // move on to next att.
+                                    //         }
+                                    //     }
+                                    // }
 
-                                    }
                                     // if ibgp peer sent you this route
                                     // if they didn't originate it
                                     // consider the external AS in the AS path for comparing MED
