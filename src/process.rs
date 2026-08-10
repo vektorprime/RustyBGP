@@ -100,7 +100,9 @@ impl BGPProcess {
     }
 
     pub fn calc_best_path() {
-        // TODO signal new routes in adj rib in so we can trigger this func, maybe add a delay so we receive all routes before running this func
+        // I ended up not putting the code here because it fell cleanly into the message_channel_loop. I may still funnel it into here though.
+
+        //
         // since our router will be control-plane only, there will be some differences in between us, Cisco, and the RFC implementations
         // e.g. idc about next-hop being reachable
 
@@ -280,9 +282,11 @@ impl BGPProcess {
         let bgp_proc_arc = Arc::clone(&bgp_proc);
         // init
         BGPProcess::populate_local_rib_from_config_arc(&bgp_proc_arc).await;
+        // these are the channels we'll use to send and receive messages between proc and neighbors
+        // we'll create 2 2-way channels for each neighbor and we'll send 1 2-way channel to the neighbor and the other in this HashMap
         let all_neighbors_channels_arc = BGPProcess::init_process_channels();
         let (tx_channel_watcher, rx_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(1);
-        //let (tx_all_event_channel_watcher, rx_all_event_channel_watcher) = broadcast::channel::<ChannelWatcherMessage>(1);
+        // let (tx_all_event_channel_watcher, rx_all_event_channel_watcher) = broadcast::channel::<ChannelWatcherMessage>(1);
         let mut all_neighbors = BGPProcess::populate_neighbors_from_config(&bgp_proc, &all_neighbors_channels_arc, tx_channel_watcher).await;
         BGPProcess::run_recv_message_channel_loop(Arc::clone(&bgp_proc), Arc::clone(&all_neighbors_channels_arc), rx_channel_watcher).await;
         BGPProcess::generate_event_for_all_neighbors(&mut all_neighbors, Event::AutomaticStartWithPassiveTcpEstablishment).await;
@@ -369,7 +373,7 @@ impl BGPProcess {
                     };
                     let (tx_to_bgp, rx_from_neighbor)  = mpsc::channel::<ChannelMessage>(65535);
                     let (tx_to_neighbor, rx_from_bgp) = mpsc::channel::<ChannelMessage>(65535);
-                    let neighbors_channels = NeighborChannel {
+                    let neighbors_channel = NeighborChannel {
                         rx: rx_from_neighbor,
                         tx: tx_to_neighbor,
                         peer_type: peer_type.clone()
@@ -384,7 +388,7 @@ impl BGPProcess {
                     // need to use a temp HashMap because we already borrowed bgp_proc as mutable
                     {
                         let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
-                        all_neighbors_channels.insert(ip, neighbors_channels);
+                        all_neighbors_channels.insert(ip, neighbors_channel);
                     }
 
                     match Neighbor::new(ip, AS::AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings.clone(), bgp_channel, tx_channel_watcher.clone()) {
@@ -462,7 +466,7 @@ impl BGPProcess {
         // TODO come back and handle multiple ASPathSegmentType objects here once I refactor that code.
 
         // Right now, this assumes only one SegmentType can be present
-        println!("comparing route as path");
+        //println!("comparing route as path");
         let candidate_path_as_path_len = candidate_best_path.as_path.as_path_segment.number_of_as;
         let curr_best_path_as_path_len = curr_best_path.as_path.as_path_segment.number_of_as;
 
@@ -491,28 +495,44 @@ impl BGPProcess {
             _ => BestPathResult::CurrentPath
 
         }
-
-        //BestPathResult::CurrentPath
     }
-    fn compare_route_med(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
-        // if routes are from same neighbor AS, then prefer lowest MED, missing MED means 0, ignore confed sub as
-        // assume that we already checked the neighbor AS if we made it this far
+
+
+    fn compare_route_med(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> Option<BestPathResult> {
+        // If routes are from same neighbor AS, then prefer lowest MED, missing MED means 0, ignore confed sub as
+
+        // Check the first AS in the path to make sure it matches otherwise return None or Tie. Tie is lazy, I'll do None.
+        // Debating if this if let is too wordy or not... leaving it for now.
+        if let (Some(curr_best_first_as),Some(cand_first_as)) = (curr_best_path.as_path.as_path_segment.as_list.get(0), candidate_best_path.as_path.as_path_segment.as_list.get(0)) {
+            if curr_best_first_as != cand_first_as { return None }
+        }
+
+        // TODO come back and enable deterministic med as default
+
         // TODO Come back and check if we are populating default MED on routes before they get here
         match (candidate_best_path.multi_exit_disc, curr_best_path.multi_exit_disc) {
             (Some(candidate_med), Some(curr_best_path_med)) => {
                 if candidate_med.value > curr_best_path_med.value {
-                    return BestPathResult::CandidatePath
+                    return Some(BestPathResult::CandidatePath)
                 } else if candidate_med.value < curr_best_path_med.value {
-                    return BestPathResult::CurrentPath
+                    return Some(BestPathResult::CurrentPath)
                 }
-                BestPathResult::Tie
+                Some(BestPathResult::Tie)
             },
-            (Some(_), None) => BestPathResult::CandidatePath,
-            (None, Some(_)) => BestPathResult::CurrentPath,
-            (None, None) => BestPathResult::Tie
+            (Some(_), None) => Some(BestPathResult::CandidatePath),
+            (None, Some(_)) => Some(BestPathResult::CurrentPath),
+            (None, None) => Some(BestPathResult::Tie)
         }
-
     }
+
+    // fn compare_ebgp_over_ibgp(curr_best_path: &RouteV4, candidate_best_path: &RouteV4, peer_type: PeerType) -> BestPathResult {
+    //     // Prefer eBGP over iBGP
+    //
+    //     // match (candidate_peer_type, curr_peer_type) {
+    //     //     // match all peer types
+    //     // }
+    //
+    // }
 
     pub async fn run_recv_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>, rx_channel_watcher: Receiver<ChannelWatcherMessage>) {
         // TODO need to refactor this so we don't loop to unlock the all_neighbors_channels_arc
@@ -560,12 +580,13 @@ impl BGPProcess {
                                     //
 
                                     all_results.push(BGPProcess::compare_route_local_pref(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference));
+                                    // not going to implement prefer locally originated (Cisco) or prefer lowest accumulated IGP route (Juniper) for now
                                     all_results.push(BGPProcess::compare_route_as_path(curr_best_path, candidate_path));
                                     all_results.push(BGPProcess::compare_route_origin(curr_best_path, candidate_path));
-                                    if peer_type == PeerType::Internal {
-                                        all_results.push(BGPProcess::compare_route_med(curr_best_path, candidate_path));
-
+                                    if let Some(med_result) = BGPProcess::compare_route_med(curr_best_path, candidate_path) {
+                                        all_results.push(med_result);
                                     }
+
                                     let mut move_to_next_route: bool = false;
                                     for res in all_results {
                                         match res {
@@ -584,71 +605,38 @@ impl BGPProcess {
 
                                     if move_to_next_route { continue; }
 
-                                    // match BGPProcess::compare_route_local_pref(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference) {
-                                    //     BestPathResult::CandidatePath => {
-                                    //         best_path = Some(candidate_path.clone());
-                                    //         continue;
-                                    //     },
-                                    //     BestPathResult::CurrentPath => {
-                                    //         continue;
-                                    //     },
-                                    //     BestPathResult::Tie => {
-                                    //         // move on to next att.
-                                    //     }
-                                    // }
+                                    // I'll stop here and instead look at resending the routes back out
+                                    // after selecting best path as well as looking at the routing table to confirm path selection
 
-                                    // not going to implement prefer locally originated (Cisco) or prefer lowest accumulated IGP route (Juniper) for now
+                                    // TODO finish the rest of the comparisons
 
-                                    // match BGPProcess::compare_route_as_path(curr_best_path, candidate_path) {
-                                    //     BestPathResult::CandidatePath => {
-                                    //         best_path = Some(candidate_path.clone());
-                                    //         continue;
-                                    //     },
-                                    //     BestPathResult::CurrentPath => {
-                                    //         continue;
-                                    //     },
-                                    //     BestPathResult::Tie => {
-                                    //         // move on to next att.
-                                    //     }
-                                    // }
-
-                                    // match BGPProcess::compare_route_origin(curr_best_path, candidate_path) {
-                                    //     BestPathResult::CandidatePath => {
-                                    //         best_path = Some(candidate_path.clone());
-                                    //         continue;
-                                    //     },
-                                    //     BestPathResult::CurrentPath => {
-                                    //         continue;
-                                    //     },
-                                    //     BestPathResult::Tie => {
-                                    //         // move on to next att.
-                                    //     }
-                                    // }
-
-                                    // if peer_type == PeerType::Internal {
-                                    //     match BGPProcess::compare_route_med(curr_best_path, candidate_path) {
-                                    //         BestPathResult::CandidatePath => {
-                                    //             best_path = Some(candidate_path.clone());
-                                    //             continue;
-                                    //         },
-                                    //         BestPathResult::CurrentPath => {
-                                    //             continue;
-                                    //         },
-                                    //         BestPathResult::Tie => {
-                                    //             // move on to next att.
-                                    //         }
-                                    //     }
-                                    // }
-
-                                    // if ibgp peer sent you this route
-                                    // if they didn't originate it
-                                    // consider the external AS in the AS path for comparing MED
-                                    // if they originated it or aggregated it
-                                    // then use the local AS for comparing MED
-
+                                    //compare_ebgp_over_ibgp()
+                                    // TODO I need not only the new route's peer type but also the best route's peer type
 
                                 }
                             }
+                            
+                            if let Some(bp) = best_path {
+                                match bgp_proc.local_rib.get_mut(&rt) {
+                                    Some(best_path_vec) => {
+                                        best_path_vec.push(bp);
+                                    },
+                                    None => {
+                                        bgp_proc.local_rib.insert(rt, vec![bp] );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    //println!("BEGIN BGP LOCAL RIB");
+                    //println!("{:?}", bgp_proc.local_rib);
+                    //println!("END BGP LOCAL RIB");
+                    let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
+                    // TODO need a mechanism for only active neighbors so I don't waste CPU cycles
+                    println!("Sending routes from proc to all neighbors via NeighborChannel");
+                    for (_, route_channel) in &mut *all_neighbors_channels {
+                        for (_, route_vec) in &bgp_proc.local_rib {
+                            route_channel.send_route_vec(&route_vec).await;
                         }
                     }
                 }
@@ -678,11 +666,12 @@ impl BGPProcess {
                                             }
                                         }
                                         println!("Adding route to BGP ADJ RIB IN");
-                                        println!("Current BGP ADJ RIB IN is {:#?}", bgp_proc.adj_rib_in);
+                                        //println!("Current BGP ADJ RIB IN is {:#?}", bgp_proc.adj_rib_in);
                                     }
                                     //path_changed = true;
                                 },
                                 ChannelMessage::WithdrawRoute(nlri_vec) => {
+                                    // TODO I need to come back and rethink the order of operations of withdrawing with local_rib and adj_rib_in because the low level details are not clear
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
                                     for nlri in nlri_vec {
                                         // store route here so we know which to run bestpath for later

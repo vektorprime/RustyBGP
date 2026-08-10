@@ -266,7 +266,8 @@ impl Neighbor {
             for nlri in &nlri_coll {
                 // debating if I should do the checks here or move more logic into new()
                 let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone());
-                println!("Adding Route {:#?} to adj_rib_in", rt);
+                //println!("Adding route {:#?} to adj_rib_in", rt);
+                println!("Adding route to adj_rib_in");
                 //self.routes_v4.push(rt);
                 self.adj_rib_in.insert(nlri.clone(), rt.clone());
                 // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
@@ -279,8 +280,17 @@ impl Neighbor {
         }
     }
 
+
     pub async fn handle_event(&mut self, event: Event, tcp_channel_tx: &mpsc::Sender<TCPChannelMessage>) -> Result<(), BGPError> {
-        println!("Handling event {:#?} in state {:#?}", event, self.fsm.state);
+        // don't display the UpdateMsg here it's taking too much console space
+        match &event {
+            Event::UpdateMsg(_) => {},
+            _ => {
+                println!("handling event {:#?} in state {:#?}", event, self.fsm.state);
+            }
+        }
+
+        //println!("Handling event {:#?} in state {:#?}", event, self.fsm.state);
         match self.fsm.state {
             State::Idle => {
                 // no connections being attempted or accepted
@@ -1116,6 +1126,7 @@ impl Neighbor {
                     },
                     Event::UpdateMsg(msg) => {
                         // TODO filter routes or modify them in the adj_rib_in here
+                        // I haven't decided if we'll do route-map-style filtering here or in the BGP proc
                         // TODO handle withdrawn routes here too
                         if msg.nlri.is_none() && msg.withdrawn_routes.is_some() {
                             self.withdraw_routes_from_message(msg.clone()).await?
@@ -1179,6 +1190,7 @@ impl Neighbor {
                             //         true } else { false }
                             // } else { false };
 
+                            // TODO only send new or changed routes, not all
                             for (nlri, route) in &self.adj_rib_out {
 
                                 let mut pa_len: u16 = 0;
@@ -1529,7 +1541,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
                             .iter()
                             .map(|b| format!("{:02X} ", b))
                             .collect::<String>();
-                        println!("Data read from the stream: {}", hex);
+                        //println!("Data read from the stream: {}", hex);
                         // min valid bgp msg len is 19 bytes
                         if tsbuf.len() < 19 {
                             println!("Data in stream too low to be a valid message, skipping: {}", hex);

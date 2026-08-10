@@ -62,7 +62,7 @@ impl NeighborChannel {
         }
         // does not need tx_channel_watcher because it's only used in run_recv_message_channel_loop in the proc, not in the neighbor.
         //tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await.unwrap();
-        //}
+        //
     }
 
 
