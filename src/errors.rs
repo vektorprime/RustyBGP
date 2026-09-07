@@ -68,12 +68,20 @@ pub enum ProcessError {
 }
 
 #[derive(PartialEq, Debug)]
+pub enum ChannelError {
+    Down,
+    Full,
+    Unknown,
+}
+
+#[derive(PartialEq, Debug)]
 pub enum BGPError {
     Neighbor(NeighborError),
     Message(MessageError),
     Process(ProcessError),
     Timer(TimerError),
     Event(EventError),
+    Channel(ChannelError),
 }
 
 impl From<ProcessError> for BGPError {
@@ -97,6 +105,11 @@ impl From<EventError> for BGPError {
 
 impl From<TimerError> for BGPError {
     fn from(e: TimerError) -> BGPError { BGPError::Timer(e) }
+}
+
+impl From<ChannelError> for BGPError {
+    fn from(e: ChannelError) -> BGPError { BGPError::Channel(e) }
+
 }
 
 // impl From<MessageError> for NeighborError {

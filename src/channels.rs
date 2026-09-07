@@ -74,7 +74,7 @@ impl NeighborChannel {
     }
 
     pub fn recv_tcp_conn_from_bgp_proc(&mut self) -> Option<TcpStream> {
-        //println!("executing recv_tcp_conn_from_bgp_proc");
+        println!("executing recv_tcp_conn_from_bgp_proc");
         if let Ok(ChannelMessage::TcpEstablished(tcp_stream)) = self.rx.try_recv() {
             return Some(tcp_stream)
         }
@@ -82,7 +82,7 @@ impl NeighborChannel {
     }
 
     pub fn send_tcp_conn_to_neighbor(&self, tcp_stream: TcpStream) -> Result<(), EventError> {
-        //println!("executing send_tcp_conn_to_neighbor");
+        println!("executing send_tcp_conn_to_neighbor");
         // This func doesn't need ChannelWatcherMessage because it runs only in run_process_loop.
         // ChannelWatcherMessage is really for sending an unlock signal from neighbor to proc loop.
         self.tx.try_send(ChannelMessage::TcpEstablished(tcp_stream)).map_err(|_| EventError::ChannelDown)

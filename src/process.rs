@@ -54,6 +54,7 @@ enum BestPathResult {
     Tie,
 }
 
+
 #[derive(Debug)]
 pub struct BGPProcess {
     pub global_settings: GlobalSettings,
@@ -62,7 +63,10 @@ pub struct BGPProcess {
     pub configured_networks: Vec<NetAdvertisementsConfig>,
     // TODO changes to loc-rib generate events to all neighbors to send update
     pub adj_rib_in: HashMap<NLRI, Vec<RouteV4>>,
+    // TODO make ribs their own struct with enums
     pub local_rib: HashMap<NLRI, Vec<RouteV4>>,
+    pub local_rib_has_updates: bool,
+
     //pub neighbors_channels: HashMap<Ipv4Addr, NeighborChannel>, // moved to it's own var so we can lock it separately from the bgp proc
 }
 
@@ -95,6 +99,7 @@ impl BGPProcess {
             configured_networks: config.net_advertisements_config,
             adj_rib_in: HashMap::new(),
             local_rib: HashMap::new(),
+            local_rib_has_updates: false,
             //neighbors_channels: HashMap::new(),
         }
     }
@@ -285,12 +290,12 @@ impl BGPProcess {
         // these are the channels we'll use to send and receive messages between proc and neighbors
         // we'll create 2 2-way channels for each neighbor and we'll send 1 2-way channel to the neighbor and the other in this HashMap
         let all_neighbors_channels_arc = BGPProcess::init_process_channels();
-        let (tx_channel_watcher, rx_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(1);
+        let (tx_channel_watcher, rx_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(10);
         // let (tx_all_event_channel_watcher, rx_all_event_channel_watcher) = broadcast::channel::<ChannelWatcherMessage>(1);
         let mut all_neighbors = BGPProcess::populate_neighbors_from_config(&bgp_proc, &all_neighbors_channels_arc, tx_channel_watcher).await;
         BGPProcess::run_recv_message_channel_loop(Arc::clone(&bgp_proc), Arc::clone(&all_neighbors_channels_arc), rx_channel_watcher).await;
         BGPProcess::generate_event_for_all_neighbors(&mut all_neighbors, Event::AutomaticStartWithPassiveTcpEstablishment).await;
-        //
+        // end init
 
 
         let listener = start_tcp(address.to_string(), port.to_string()).await;
@@ -534,6 +539,18 @@ impl BGPProcess {
     //
     // }
 
+    pub async fn send_routes_to_neighbors(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels_arc: &Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>) {
+        let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
+        // TODO need a mechanism for only active neighbors so I don't waste CPU cycles
+        println!("Sending routes from proc to all neighbors via NeighborChannel");
+        let bgp_proc = bgp_proc_arc.lock().await;
+        for (_, route_channel) in &mut *all_neighbors_channels {
+            for (_, route_vec) in &bgp_proc.local_rib {
+                route_channel.send_route_vec(&route_vec).await;
+            }
+        }
+    }
+
     pub async fn run_recv_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>, rx_channel_watcher: Receiver<ChannelWatcherMessage>) {
         // TODO need to refactor this so we don't loop to unlock the all_neighbors_channels_arc
         // maybe pass a MessageReady event that we await on
@@ -632,14 +649,8 @@ impl BGPProcess {
                     //println!("BEGIN BGP LOCAL RIB");
                     //println!("{:?}", bgp_proc.local_rib);
                     //println!("END BGP LOCAL RIB");
-                    let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
-                    // TODO need a mechanism for only active neighbors so I don't waste CPU cycles
-                    println!("Sending routes from proc to all neighbors via NeighborChannel");
-                    for (_, route_channel) in &mut *all_neighbors_channels {
-                        for (_, route_vec) in &bgp_proc.local_rib {
-                            route_channel.send_route_vec(&route_vec).await;
-                        }
-                    }
+                    BGPProcess::send_routes_to_neighbors(&bgp_proc_arc, &all_neighbors_channels_arc).await;
+
                 }
 
                 // TODO Wow, I made this func way too long, need to break it up

@@ -1289,13 +1289,17 @@ impl Neighbor {
         }
     }
 
-    pub fn generate_event(&mut self, event: Event) {
+    pub fn generate_event(&mut self, event: Event) -> Result<(), BGPError> {
         // todo handle error or switch to regular mpsc
         match self.tx_event_channel_watcher.as_ref() {
-            Some(tx) => {tx.try_send(ChannelWatcherMessage::MessageWaiting).unwrap()}
+            Some(tx) => {
+                // TODO handle different channel errors here
+                tx.try_send(ChannelWatcherMessage::MessageWaiting).map_err(|e|BGPError::Channel(ChannelError::Unknown))?;
+            }
             None => {println!("generate_event failed for {:?}, tx_event_channel_watcher is none", event)}
         }
         self.events.push_back(event);
+        Ok(())
     }
 
     pub fn generate_event_from_message(&mut self, tsbuf: &Vec<u8>, message_type: MessageType) -> Result<(), BGPError> {
@@ -1453,7 +1457,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
     //pub async fn run(&mut self, tcp_stream: TcpStream) {
 
     // setup channel to be used for signaling TCP dropping
-    let (tcp_channel_tx, mut tcp_channel_rx) = tokio::sync::mpsc::channel::<TCPChannelMessage>(1);
+    let (tcp_channel_tx, mut tcp_channel_rx) = tokio::sync::mpsc::channel::<TCPChannelMessage>(10);
 
     // max bgp msg size should never exceed 4096
     // TODO determine if we want to honor the above rule or not, if not, how should we handle it
