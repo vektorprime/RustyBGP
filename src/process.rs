@@ -263,7 +263,7 @@ impl BGPProcess {
             let aggregator = None;
             let new_route = RouteV4::new(nlri.clone(), origin, as_path, next_hop , local_pref, med, atomic_aggregate, aggregator);
 
-            self.adj_rib_in.insert(nlri, vec![new_route]);
+            self.local_rib.insert(nlri, vec![new_route]);
         }
     }
 
@@ -541,16 +541,17 @@ impl BGPProcess {
         tokio::spawn( async move {
             let mut watcher = rx_channel_watcher;
             //let mut path_changed = false;
-            let mut routes_need_best_path_calc: Vec<(NLRI, PeerType)> = Vec::new();
+            let mut routes_pending_best_path_calc: Vec<(NLRI, PeerType)> = Vec::new();
             loop {
-                if !routes_need_best_path_calc.is_empty() {
+                if !routes_pending_best_path_calc.is_empty() {
                     // TODO calculate best path if path changed
-                    // go through every nlri and find the best metrics
+                    // go through every nlri and find the best attributes
                     let mut bgp_proc = bgp_proc_arc.lock().await;
-                    while let Some((rt, peer_type)) = routes_need_best_path_calc.pop() {
+                    while let Some((rt, peer_type)) = routes_pending_best_path_calc.pop() {
+                        // I keep route sin adj rin in too because if the best path goes away I have the filtered backup paths here
                         if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.get(&rt) {
                             let mut best_path: Option<RouteV4> = None;
-                            let best_path_exists = if best_path.is_none() {false} else {true};
+                            let best_path_exists = best_path.is_some();
                             for candidate_path in all_paths_for_rt {
                                 if !best_path_exists {
                                     best_path = Some(candidate_path.clone());
@@ -649,33 +650,32 @@ impl BGPProcess {
                     for (neighbor_ip, route_channel) in &mut *all_neighbors_channels {
                         while let Ok(msg) = route_channel.rx.try_recv() {
                             match msg {
-                                ChannelMessage::Route(route) => {
-                                    // for now, I will just test adding it to the bgp loc_rib
+                                ChannelMessage::Route(new_route) => {
                                     // if an entry for the NLRI exists, add the route path too it don't overwrite
                                     {
-                                        let nlri = route.nlri.clone();
+                                        let new_nlri = new_route.nlri.clone();
                                         // store route here so we know which to run bestpath for later
-                                        routes_need_best_path_calc.push((nlri.clone(), route_channel.peer_type.clone()));
+                                        routes_pending_best_path_calc.push((new_nlri.clone(), route_channel.peer_type.clone()));
                                         let mut bgp_proc = bgp_proc_arc.lock().await;
-                                        match bgp_proc.adj_rib_in.get_mut(&nlri) {
+                                        match bgp_proc.adj_rib_in.get_mut(&new_nlri) {
                                             Some(route_paths) => {
-                                                route_paths.push(route);
+                                                route_paths.push(new_route);
                                             }
                                             None => {
-                                                bgp_proc.adj_rib_in.insert(nlri, vec![route]);
+                                                bgp_proc.adj_rib_in.insert(new_nlri, vec![new_route]);
                                             }
                                         }
                                         println!("Adding route to BGP ADJ RIB IN");
                                         //println!("Current BGP ADJ RIB IN is {:#?}", bgp_proc.adj_rib_in);
                                     }
                                     //path_changed = true;
-                                },
+                                }
                                 ChannelMessage::WithdrawRoute(nlri_vec) => {
                                     // TODO I need to come back and rethink the order of operations of withdrawing with local_rib and adj_rib_in because the low level details are not clear
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
                                     for nlri in nlri_vec {
                                         // store route here so we know which to run bestpath for later
-                                        routes_need_best_path_calc.push((nlri.clone(), route_channel.peer_type.clone()));
+                                        routes_pending_best_path_calc.push((nlri.clone(), route_channel.peer_type.clone()));
                                         // continue with withdraw
                                         println!("Removing route from BGP Local RIB");
                                         if let None =  bgp_proc.local_rib.remove(&nlri) {
@@ -692,7 +692,7 @@ impl BGPProcess {
                                 ChannelMessage::NeighborUp => {
                                     // Allow the BGP proc to send messages (routes) to the Neighbor task
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
-                                    for (_nlri, route_vec) in &bgp_proc.adj_rib_in {
+                                    for (_nlri, route_vec) in &bgp_proc.local_rib {
                                         println!("Received ChannelMessage::NeighborUp, sending route_vec - {:#?}", route_vec);
                                         route_channel.send_route_vec(route_vec).await;
                                     }
