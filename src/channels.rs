@@ -49,16 +49,21 @@ impl NeighborChannel {
 
     pub async fn send_route(&self, route: RouteV4, tx_channel_watcher: &mpsc::Sender<ChannelWatcherMessage>) {
         //if self.is_active {
-        self.tx.send(ChannelMessage::Route(route)).await.unwrap();
-        tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await.unwrap();
-        //}
+        if let Err(e) = self.tx.send(ChannelMessage::Route(route)).await {
+            println!("ERROR in send_route - {:#?}", e);
+        }
+        if let Err(e) = tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await {
+            println!("ERROR in send_route - {:#?}", e);
+        }
     }
 
 
     pub async fn send_route_vec(&self, routes: &Vec<RouteV4>) {
         //if self.is_active {
         for route in routes {
-            self.tx.send(ChannelMessage::Route(route.clone())).await.unwrap();
+            if let Err(e) = self.tx.send(ChannelMessage::Route(route.clone())).await {
+                println!("ERROR in send_route_vec - {:#?}", e);
+            }
         }
         // does not need tx_channel_watcher because it's only used in run_recv_message_channel_loop in the proc, not in the neighbor.
         //tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await.unwrap();
@@ -68,9 +73,12 @@ impl NeighborChannel {
 
     pub async fn withdraw_route(&self, nlri_vec: Vec<NLRI>, tx_channel_watcher: &mpsc::Sender<ChannelWatcherMessage>) {
         //if self.is_active {
-        self.tx.send(ChannelMessage::WithdrawRoute(nlri_vec)).await.unwrap();
-        tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await.unwrap();
-        //}
+        if let Err(e) = self.tx.send(ChannelMessage::WithdrawRoute(nlri_vec)).await {
+            println!("ERROR in send_route_vec - {:#?}", e);
+        }
+        if let Err(e) = tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await {
+            println!("ERROR in send_route_vec - {:#?}", e);
+        }
     }
 
     pub fn recv_tcp_conn_from_bgp_proc(&mut self) -> Option<TcpStream> {

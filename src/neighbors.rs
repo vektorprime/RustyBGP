@@ -1294,7 +1294,12 @@ impl Neighbor {
         match self.tx_event_channel_watcher.as_ref() {
             Some(tx) => {
                 // TODO handle different channel errors here
-                tx.try_send(ChannelWatcherMessage::MessageWaiting).map_err(|e|BGPError::Channel(ChannelError::Unknown))?;
+                if let Err(e) = tx.try_send(ChannelWatcherMessage::MessageWaiting) {
+                    println!("ERROR in generate_event - {:#?}", e);
+                    return Err(BGPError::Channel(ChannelError::Unknown));
+                }
+
+                    //.map_err(|e|BGPError::Channel(ChannelError::Unknown))?;
             }
             None => {println!("generate_event failed for {:?}, tx_event_channel_watcher is none", event)}
         }
