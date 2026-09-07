@@ -548,7 +548,7 @@ impl BGPProcess {
                     // go through every nlri and find the best attributes
                     let mut bgp_proc = bgp_proc_arc.lock().await;
                     while let Some((rt, peer_type)) = routes_pending_best_path_calc.pop() {
-                        // I keep route sin adj rin in too because if the best path goes away I have the filtered backup paths here
+                        // I keep routes in adj rin in too because if the best path goes away I have the filtered backup paths here
                         if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.get(&rt) {
                             let mut best_path: Option<RouteV4> = None;
                             let best_path_exists = best_path.is_some();
