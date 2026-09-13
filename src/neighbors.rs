@@ -56,6 +56,7 @@ pub struct Neighbor {
     //pub routes_v4: Vec<RouteV4>,
     pub peer_type: PeerType,
     pub ip_type: IPType,
+    pub rid: Option<Ipv4Addr>,
     pub global_settings: GlobalSettings,
     pub events: VecDeque<Event>,
     // TODO adj-rib-in filters routes coming in, then generates events to loc-rib with the route, trigger best path calc here
@@ -165,6 +166,7 @@ impl Neighbor {
             //routes_v4: Vec::new(),
             peer_type,
             ip_type: IPType::V4,
+            rid: None,
             global_settings: settings, // we don't store a reference here because it gets too complicated
             // we'll update all neighbor from the BGP proc settings when anything changes.
             events: VecDeque::new(),
@@ -263,7 +265,7 @@ impl Neighbor {
             // let aggregator = PathAttribute::get_pa_data_from_pa_vec(TypeCode::Aggregator, &path_attributes);
             for nlri in &nlri_coll {
                 // debating if I should do the checks here or move more logic into new()
-                let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone(), Some(self.peer_type), Some(self.ip));
+                let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone(), Some(self.peer_type),self.rid, Some(self.ip));
                 //println!("Adding route {:#?} to adj_rib_in", rt);
                 println!("Adding route to adj_rib_in");
                 //self.routes_v4.push(rt);
@@ -778,6 +780,8 @@ impl Neighbor {
                                 return Err(NeighborError::ASNumMismatch.into());
                             }
                         }
+
+                        self.rid = Option::from(msg.identifier);
 
                         if msg.hold_time < self.fsm.hold_time {
                             self.fsm.hold_time = msg.hold_time;
@@ -1311,6 +1315,7 @@ impl Neighbor {
             MessageType::Open => {
                 let received_msg = extract_open_message(tsbuf)?;
                 println!("Generating Event::OpenMsg for neighbor {:#?}", self.ip);
+                // TODO handle the results in the uses of generate_events
                 self.generate_event(Event::OpenMsg(received_msg));
             },
             MessageType::Update => {

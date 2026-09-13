@@ -40,6 +40,7 @@ async fn start_tcp(address: String, port: String) -> TcpListener {
 pub struct GlobalSettings {
     pub my_as: u16,
     pub identifier: Ipv4Addr,
+    pub my_ip: Ipv4Addr,
     pub next_hop_ip: Ipv4Addr,
     pub version: BGPVersion,
     pub default_local_preference: u32,
@@ -89,8 +90,9 @@ impl BGPProcess {
 
         let global_settings = GlobalSettings {
             my_as: config.process_config.my_as,
-            identifier: Ipv4Addr::from_str(&config.process_config.router_id).unwrap(),
-            next_hop_ip: Ipv4Addr::from_str(&config.process_config.next_hop_ip).unwrap(),
+            identifier: Ipv4Addr::from_str(&config.process_config.router_id).expect("Unable to get IPv4 Address from router_id in config"),
+            my_ip: Ipv4Addr::from_str(&config.process_config.bind_on_ip).expect("Unable to get IPv4 Address from my_ip in config"),
+            next_hop_ip: Ipv4Addr::from_str(&config.process_config.next_hop_ip).expect("Unable to get IPv4 Address from next_hop_ip in config"),
             default_local_preference: config.process_config.default_local_preference,
             default_med: config.process_config.default_med,
             version: BGPVersion::V4,
@@ -135,12 +137,11 @@ impl BGPProcess {
         let ebgp_ibgp_res = BGPProcess::compare_route_ebgp_ibgp(curr_best_path, candidate_path);
         if ebgp_ibgp_res != BestPathResult::Tie { return ebgp_ibgp_res }
 
-        let rid_res = BGPProcess::compare_route_rid(curr_best_path, candidate_path);
+        let rid_res = BGPProcess::compare_route_neighbor_rid(curr_best_path, candidate_path);
         if rid_res != BestPathResult::Tie { return rid_res }
 
-        // TODO compare and choose lowest BGP peer IP
-
-        BestPathResult::Tie
+        BGPProcess::compare_route_neighbor_ip(curr_best_path, candidate_path)
+        // there's no way this should end with a tie, but I handle that in the parent func
 
     }
 
@@ -252,7 +253,8 @@ impl BGPProcess {
             let med = Some(MultiExitDisc::new(self.global_settings.default_med));
             let atomic_aggregate = None;
             let aggregator = None;
-            let new_route = RouteV4::new(nlri.clone(), origin, as_path, next_hop , local_pref, med, atomic_aggregate, aggregator, None, Some(self.global_settings.identifier));
+            // TODO determine if we want the peer type to be Internal here
+            let new_route = RouteV4::new(nlri.clone(), origin, as_path, next_hop , local_pref, med, atomic_aggregate, aggregator, None, Some(self.global_settings.identifier), Some(self.global_settings.my_ip));
 
             self.local_rib.routes.insert(nlri, vec![new_route]);
         }
@@ -547,19 +549,26 @@ impl BGPProcess {
         }
     }
 
-    fn compare_route_rid(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
-        match (curr_best_path.peer_rid, candidate_best_path.peer_rid) {
-            (Some(curr_peer_rid), Some(candidate_peer_rid)) => {
-                if curr_peer_rid < candidate_peer_rid { BestPathResult::CurrentPath }
-                else if candidate_peer_rid < curr_peer_rid { BestPathResult::CandidatePath }
+    fn compare_lowest_ip(curr_best_path: Option<Ipv4Addr>, candidate_best_path: Option<Ipv4Addr>) -> BestPathResult {
+        match (curr_best_path, candidate_best_path) {
+            (Some(curr_peer_ip), Some(candidate_peer_ip)) => {
+                if curr_peer_ip < candidate_peer_ip { BestPathResult::CurrentPath }
+                else if candidate_peer_ip < curr_peer_ip { BestPathResult::CandidatePath }
                 else { BestPathResult::Tie }
             },
-            (Some(_curr_peer_rid), None ) => { BestPathResult::CurrentPath },
-            (None, Some(_candidate_peer_rid)) => { BestPathResult::CandidatePath },
+            (Some(_curr_peer_ip), None ) => { BestPathResult::CurrentPath },
+            (None, Some(_candidate_peer_ip)) => { BestPathResult::CandidatePath },
             (None, None) => { BestPathResult::Tie }
         }
     }
 
+    fn compare_route_neighbor_rid(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
+        BGPProcess::compare_lowest_ip(curr_best_path.peer_rid, candidate_best_path.peer_rid)
+    }
+
+    fn compare_route_neighbor_ip(curr_best_path: &RouteV4, candidate_best_path: &RouteV4) -> BestPathResult {
+        BGPProcess::compare_lowest_ip(curr_best_path.peer_ip, candidate_best_path.peer_ip)
+    }
 
     pub async fn send_local_rib_routes_to_neighbors(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels_arc: &Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>) {
         let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
@@ -591,7 +600,6 @@ impl BGPProcess {
                         if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.routes.get(&rt) {
                             let mut best_path: Option<RouteV4> = None;
                             for candidate_path in all_paths_for_rt {
-                                // TODO rewrite this as a match
                                 match &best_path {
                                     None => {
                                         best_path = Some(candidate_path.clone());
@@ -630,10 +638,7 @@ impl BGPProcess {
                                             }
                                         }
 
-                                        // I'll stop here and instead look at resending the routes back out
-                                        // after selecting best path as well as looking at the routing table to confirm path selection
-
-
+                                        // We send the routes to the neighbor later in this func
 
                                     }
                                 }
@@ -721,7 +726,6 @@ impl BGPProcess {
                                 ChannelMessage::TcpEstablished(tcp_stream) => {
                                     panic!("We should never get a NeighborChannel::TcpEstablished from Neighbor to BGP proc");
                                 }
-
                             }
                         }
                     }

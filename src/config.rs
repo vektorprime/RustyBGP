@@ -26,6 +26,7 @@ pub struct Config {
 pub struct ProcessConfig {
     pub my_as: u16,
     pub router_id: String,
+    pub bind_on_ip: String,
     pub next_hop_ip: String,
     pub default_local_preference: u32,
     pub default_med: u32,

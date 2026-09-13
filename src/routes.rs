@@ -95,14 +95,15 @@ pub struct RouteV4 {
     pub atomic_aggregate: Option<AtomicAggregate>,
     pub aggregator: Option<Aggregator>,
     pub peer_type: Option<PeerType>,
-    pub peer_rid: Option<Ipv4Addr>
+    pub peer_rid: Option<Ipv4Addr>,
+    pub peer_ip: Option<Ipv4Addr>
 }
 
 impl RouteV4 {
     pub fn new(nlri: NLRI, origin: Origin, as_path: AsPath, next_hop: NextHop,
         local_pref: Option<LocalPref>, multi_exit_disc: Option<MultiExitDisc>,
         atomic_aggregate: Option<AtomicAggregate>, aggregator: Option<Aggregator>,
-        peer_type: Option<PeerType>, peer_rid: Option<Ipv4Addr>) -> Self {
+        peer_type: Option<PeerType>, peer_rid: Option<Ipv4Addr>, peer_ip: Option<Ipv4Addr>) -> Self {
 
          RouteV4 {
             nlri,
@@ -114,7 +115,8 @@ impl RouteV4 {
             atomic_aggregate,
             aggregator,
             peer_type,
-            peer_rid
+            peer_rid,
+            peer_ip,
         }
 
     }
