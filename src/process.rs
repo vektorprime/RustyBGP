@@ -54,6 +54,20 @@ enum BestPathResult {
     Tie,
 }
 
+#[derive(Debug)]
+pub struct RIB {
+    routes: HashMap<NLRI, Vec<RouteV4>>,
+    pub has_updates: bool,
+}
+
+impl RIB {
+    pub fn new() -> Self {
+        RIB {
+            routes: HashMap::new(),
+            has_updates: false,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct BGPProcess {
@@ -62,10 +76,8 @@ pub struct BGPProcess {
     pub configured_neighbors: Vec<NeighborConfig>,
     pub configured_networks: Vec<NetAdvertisementsConfig>,
     // TODO changes to loc-rib generate events to all neighbors to send update
-    pub adj_rib_in: HashMap<NLRI, Vec<RouteV4>>,
-    // TODO make ribs their own struct with enums
-    pub local_rib: HashMap<NLRI, Vec<RouteV4>>,
-    pub local_rib_has_updates: bool,
+    pub adj_rib_in: RIB,
+    pub local_rib: RIB,
 
     //pub neighbors_channels: HashMap<Ipv4Addr, NeighborChannel>, // moved to it's own var so we can lock it separately from the bgp proc
 }
@@ -97,9 +109,8 @@ impl BGPProcess {
             //neighbors: HashMap::new(),
             configured_neighbors: config.neighbors_config,
             configured_networks: config.net_advertisements_config,
-            adj_rib_in: HashMap::new(),
-            local_rib: HashMap::new(),
-            local_rib_has_updates: false,
+            adj_rib_in: RIB::new(),
+            local_rib: RIB::new(),
             //neighbors_channels: HashMap::new(),
         }
     }
@@ -268,7 +279,7 @@ impl BGPProcess {
             let aggregator = None;
             let new_route = RouteV4::new(nlri.clone(), origin, as_path, next_hop , local_pref, med, atomic_aggregate, aggregator);
 
-            self.local_rib.insert(nlri, vec![new_route]);
+            self.local_rib.routes.insert(nlri, vec![new_route]);
         }
     }
 
@@ -539,13 +550,13 @@ impl BGPProcess {
     //
     // }
 
-    pub async fn send_routes_to_neighbors(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels_arc: &Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>) {
+    pub async fn send_local_rib_routes_to_neighbors(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels_arc: &Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>) {
         let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
         // TODO need a mechanism for only active neighbors so I don't waste CPU cycles
         println!("Sending routes from proc to all neighbors via NeighborChannel");
         let bgp_proc = bgp_proc_arc.lock().await;
         for (_, route_channel) in &mut *all_neighbors_channels {
-            for (_, route_vec) in &bgp_proc.local_rib {
+            for (_, route_vec) in &bgp_proc.local_rib.routes {
                 route_channel.send_route_vec(&route_vec).await;
             }
         }
@@ -566,7 +577,7 @@ impl BGPProcess {
                     let mut bgp_proc = bgp_proc_arc.lock().await;
                     while let Some((rt, peer_type)) = routes_pending_best_path_calc.pop() {
                         // I keep routes in adj rin in too because if the best path goes away I have the filtered backup paths here
-                        if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.get(&rt) {
+                        if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.routes.get(&rt) {
                             let mut best_path: Option<RouteV4> = None;
                             let best_path_exists = best_path.is_some();
                             for candidate_path in all_paths_for_rt {
@@ -635,12 +646,12 @@ impl BGPProcess {
                             }
                             
                             if let Some(bp) = best_path {
-                                match bgp_proc.local_rib.get_mut(&rt) {
+                                match bgp_proc.local_rib.routes.get_mut(&rt) {
                                     Some(best_path_vec) => {
                                         best_path_vec.push(bp);
                                     },
                                     None => {
-                                        bgp_proc.local_rib.insert(rt, vec![bp] );
+                                        bgp_proc.local_rib.routes.insert(rt, vec![bp] );
                                     }
                                 }
                             }
@@ -649,7 +660,7 @@ impl BGPProcess {
                     //println!("BEGIN BGP LOCAL RIB");
                     //println!("{:?}", bgp_proc.local_rib);
                     //println!("END BGP LOCAL RIB");
-                    BGPProcess::send_routes_to_neighbors(&bgp_proc_arc, &all_neighbors_channels_arc).await;
+                    BGPProcess::send_local_rib_routes_to_neighbors(&bgp_proc_arc, &all_neighbors_channels_arc).await;
 
                 }
 
@@ -668,12 +679,12 @@ impl BGPProcess {
                                         // store route here so we know which to run bestpath for later
                                         routes_pending_best_path_calc.push((new_nlri.clone(), route_channel.peer_type.clone()));
                                         let mut bgp_proc = bgp_proc_arc.lock().await;
-                                        match bgp_proc.adj_rib_in.get_mut(&new_nlri) {
+                                        match bgp_proc.adj_rib_in.routes.get_mut(&new_nlri) {
                                             Some(route_paths) => {
                                                 route_paths.push(new_route);
                                             }
                                             None => {
-                                                bgp_proc.adj_rib_in.insert(new_nlri, vec![new_route]);
+                                                bgp_proc.adj_rib_in.routes.insert(new_nlri, vec![new_route]);
                                             }
                                         }
                                         println!("Adding route to BGP ADJ RIB IN");
@@ -689,7 +700,7 @@ impl BGPProcess {
                                         routes_pending_best_path_calc.push((nlri.clone(), route_channel.peer_type.clone()));
                                         // continue with withdraw
                                         println!("Removing route from BGP Local RIB");
-                                        if let None =  bgp_proc.local_rib.remove(&nlri) {
+                                        if let None =  bgp_proc.local_rib.routes.remove(&nlri) {
                                             println!("Attempted to remove {:#?} from the BGP local RIB but was unable to find the route", nlri);
                                         }
                                     }
@@ -703,7 +714,7 @@ impl BGPProcess {
                                 ChannelMessage::NeighborUp => {
                                     // Allow the BGP proc to send messages (routes) to the Neighbor task
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
-                                    for (_nlri, route_vec) in &bgp_proc.local_rib {
+                                    for (_nlri, route_vec) in &bgp_proc.local_rib.routes {
                                         println!("Received ChannelMessage::NeighborUp, sending route_vec - {:#?}", route_vec);
                                         route_channel.send_route_vec(route_vec).await;
                                     }
