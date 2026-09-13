@@ -11,8 +11,6 @@ pub struct NeighborChannelWatcher {
 pub struct NeighborChannel {
     pub tx: mpsc::Sender<ChannelMessage>,
     pub rx: mpsc::Receiver<ChannelMessage>,
-    pub peer_type: PeerType
-    //pub is_active: bool,
 }
 
 #[derive(Debug, Clone)]

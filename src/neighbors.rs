@@ -12,11 +12,9 @@ use std::mem::discriminant;
 use tokio::net::tcp::*;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
-use tokio::sync::{mpsc, broadcast};
+use tokio::sync::{mpsc};
 use tokio::sync::mpsc::{Receiver, Sender};
-use crate::sessions::*;
 use crate::finite_state_machine::*;
-use crate::timers::*;
 use crate::messages::update::*;
 use crate::errors::*;
 use crate::errors::BGPError::Message;
@@ -38,7 +36,7 @@ pub enum IPType {
     V6
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum PeerType {
     Internal,
     External
@@ -265,7 +263,7 @@ impl Neighbor {
             // let aggregator = PathAttribute::get_pa_data_from_pa_vec(TypeCode::Aggregator, &path_attributes);
             for nlri in &nlri_coll {
                 // debating if I should do the checks here or move more logic into new()
-                let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone());
+                let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone(), Some(self.peer_type), Some(self.ip));
                 //println!("Adding route {:#?} to adj_rib_in", rt);
                 println!("Adding route to adj_rib_in");
                 //self.routes_v4.push(rt);

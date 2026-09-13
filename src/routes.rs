@@ -5,6 +5,7 @@ use crate::errors::{BGPError, ProcessError};
 use crate::messages::update::*;
 
 use serde::Deserialize;
+use crate::neighbors::PeerType;
 
 #[derive(Debug)]
 pub enum RouteCast {
@@ -93,12 +94,15 @@ pub struct RouteV4 {
     pub multi_exit_disc: Option<MultiExitDisc>,
     pub atomic_aggregate: Option<AtomicAggregate>,
     pub aggregator: Option<Aggregator>,
+    pub peer_type: Option<PeerType>,
+    pub peer_rid: Option<Ipv4Addr>
 }
 
 impl RouteV4 {
     pub fn new(nlri: NLRI, origin: Origin, as_path: AsPath, next_hop: NextHop,
         local_pref: Option<LocalPref>, multi_exit_disc: Option<MultiExitDisc>,
-        atomic_aggregate: Option<AtomicAggregate>, aggregator: Option<Aggregator>) -> Self {
+        atomic_aggregate: Option<AtomicAggregate>, aggregator: Option<Aggregator>,
+        peer_type: Option<PeerType>, peer_rid: Option<Ipv4Addr>) -> Self {
 
          RouteV4 {
             nlri,
@@ -108,7 +112,9 @@ impl RouteV4 {
             local_pref,
             multi_exit_disc,
             atomic_aggregate,
-            aggregator
+            aggregator,
+            peer_type,
+            peer_rid
         }
 
     }
