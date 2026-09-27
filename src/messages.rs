@@ -219,7 +219,7 @@ pub fn extract_messages_from_rec_data(tsbuf: &[u8]) -> Result<Vec<Vec<u8>>, Mess
                 }
 
                 messages.push(Vec::from(&tsbuf[i..i + message_len as usize]));
-                bytes_to_skip = message_len;
+                bytes_to_skip = message_len - 1;
                 if i + message_len as usize >= tsbuf.len() {
                     break;
                 }

@@ -47,9 +47,11 @@ impl NeighborChannel {
 
     pub async fn send_route(&self, route: RouteV4, tx_channel_watcher: &mpsc::Sender<ChannelWatcherMessage>) {
         //if self.is_active {
+        println!("Sending route {:#?} to BGP Proc", route.nlri);
         if let Err(e) = self.tx.send(ChannelMessage::Route(route)).await {
             println!("ERROR in send_route - {:#?}", e);
         }
+        println!("Sending ChannelWatcherMessage::MessageWaiting to BGP Proc");
         if let Err(e) = tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await {
             println!("ERROR in send_route - {:#?}", e);
         }

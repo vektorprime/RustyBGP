@@ -267,7 +267,7 @@ impl Neighbor {
                 // debating if I should do the checks here or move more logic into new()
                 let rt = RouteV4::new(nlri.clone(), origin.clone(), as_path.clone(), next_hop.clone(), local_pref.clone(), med.clone(), atomic_agg.clone(), agg.clone(), Some(self.peer_type),self.rid, Some(self.ip));
                 //println!("Adding route {:#?} to adj_rib_in", rt);
-                println!("Adding route to adj_rib_in");
+                println!("Adding route {:#?} to neighbor adj_rib_in", nlri);
                 //self.routes_v4.push(rt);
                 self.adj_rib_in.insert(nlri.clone(), rt.clone());
                 // TODO get rid of this and handle it better, for now I just want to see the routes coming to the BGP proc loc_rib
@@ -1374,9 +1374,9 @@ impl Neighbor {
         }
     }
 
-    pub fn process_neighbor_message(&mut self, msg: &Vec<u8>, tsbuf: &Vec<u8>) -> Result<(), BGPError> {
+    pub fn process_neighbor_message(&mut self, msg: &Vec<u8>) -> Result<(), BGPError> {
         let message_type = parse_packet_type(msg)?;
-        self.generate_event_from_message(&tsbuf, message_type)?;
+        self.generate_event_from_message(msg, message_type)?;
         Ok(())
     }
 
@@ -1569,10 +1569,13 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
                         };
 
                         let mut neighbor = neighbor_arc.lock().await;
+                        //let mut multimsg_offset :usize = 0;
                         for msg in &messages {
-                            if let Err(e) =  neighbor.process_neighbor_message(&msg, &tsbuf) {
+                            if let Err(e) =  neighbor.process_neighbor_message(&msg) {
                                 println!("Error: {:#?}, skipping message {:#?}", e, msg);
                             }
+                            //multimsg_offset += msg.len();
+                            //tsbuf = tsbuf[msg.len()..].to_vec();
                         }
                     },
                     Err(e) => {

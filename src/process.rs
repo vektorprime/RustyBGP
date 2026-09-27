@@ -18,6 +18,7 @@ use crate::utils::*;
 use crate::messages::update::AS::AS4;
 use crate::{neighbors, process};
 use crate::channels::{ChannelWatcherMessage, ChannelMessage, NeighborChannel};
+use crate::errors::ProcessError::CannotCompareAS2vsAS4;
 use crate::messages::update::{AsPath, AsPathSegment, AsPathSegmentType, LocalPref, NextHop, Origin, OriginType, AS};
 use crate::neighbors::{Neighbor, PeerType};
 use crate::routes::{RouteV4, NLRI};
@@ -102,7 +103,7 @@ impl BGPProcess {
                 config.process_config.capabilities_config.route_refresh,
                 config.process_config.capabilities_config.enhanced_route_refresh,
                 config.process_config.capabilities_config.extended_4byte_asn,
-                Some(config.process_config.my_as as u32)
+                Some(config.process_config.my_as as u32) // TODO rewrite this logic because there will be times where this can't be u16 as u32
             )
         };
 
@@ -131,7 +132,7 @@ impl BGPProcess {
         if origin_res != BestPathResult::Tie { return origin_res }
 
         if let Some(med_result) = BGPProcess::compare_route_med(curr_best_path, candidate_path) {
-            return med_result
+            if med_result != BestPathResult::Tie { return med_result }
         }
 
         let ebgp_ibgp_res = BGPProcess::compare_route_ebgp_ibgp(curr_best_path, candidate_path);
@@ -412,13 +413,39 @@ impl BGPProcess {
         }
     }
 
-    fn is_my_asn_in_ebgp_path(my_asn: u16, candidate_path: &RouteV4) -> Result<bool, BGPError> {
-
-        for candidate_as in &candidate_path.as_path.as_path_segment.as_list {
-            if my_asn == candidate_as.to_u16()? {
-                return Ok(true)
+    fn is_my_asn_in_ebgp_path(my_asn: AS, candidate_path: &RouteV4) -> Result<bool, BGPError> {
+        match my_asn {
+            AS::AS2(my_asn) => {
+                for candidate_as in &candidate_path.as_path.as_path_segment.as_list {
+                    match candidate_as {
+                        AS::AS2(candidate_as_num) => {
+                            if my_asn == *candidate_as_num {
+                                return Ok(true)
+                            }
+                        },
+                        AS::AS4(_candidate_as_num) => {
+                            return Err(BGPError::Process(CannotCompareAS2vsAS4))
+                        },
+                    }
+                }
+            },
+            AS::AS4(my_asn) => {
+                for candidate_as in &candidate_path.as_path.as_path_segment.as_list {
+                    match candidate_as {
+                        AS::AS2(_candidate_as_num) => {
+                            return Err(BGPError::Process(CannotCompareAS2vsAS4))
+                        },
+                        AS::AS4(candidate_as_num) => {
+                            if my_asn == *candidate_as_num {
+                                return Ok(true)
+                            }
+                        },
+                    }
+                }
             }
         }
+
+
         Ok(false)
     }
 
@@ -605,7 +632,13 @@ impl BGPProcess {
                                         best_path = Some(candidate_path.clone());
                                     },
                                     Some(curr_best_path) => {
-                                        let my_asn = bgp_proc.global_settings.my_as;
+                                        let my_asn = if bgp_proc.global_settings.optional_parameters.capabilities.contains(&Capability::Extended4ByteASN(bgp_proc.global_settings.my_as as u32)) {
+                                            // TODO the upstream logic where we instantiate OptionalParameters in BGPProcess::new() needs to be rewritten so that we properly handle u32
+                                            //
+                                            AS::AS4(bgp_proc.global_settings.my_as as u32)
+                                        } else {
+                                            AS::AS2(bgp_proc.global_settings.my_as)
+                                        };
                                         if candidate_path.peer_type == Some(PeerType::External) {
                                             match BGPProcess::is_my_asn_in_ebgp_path(my_asn, &candidate_path) {
                                                 Ok(result) => {
@@ -615,7 +648,7 @@ impl BGPProcess {
                                                     }
                                                 },
                                                 Err (err) => {
-                                                    println!("Unable to check if our ASN in eBGP path due to ASN parsing, skipping");
+                                                    println!("ERROR: {:#?} -Unable to check if our ASN in eBGP path, skipping", err);
                                                     continue;
                                                 }
                                             }
@@ -623,6 +656,8 @@ impl BGPProcess {
 
                                         // TODO I think I will implement weight as an attribute because it's very useful, just not now
                                         //
+
+
 
                                         match BGPProcess::choose_best_path(curr_best_path, candidate_path, bgp_proc.global_settings.default_local_preference) {
                                             BestPathResult::CandidatePath => {
@@ -642,7 +677,6 @@ impl BGPProcess {
 
                                     }
                                 }
-
                             }
                             
                             if let Some(bp) = best_path {
@@ -683,7 +717,14 @@ impl BGPProcess {
                                         let mut bgp_proc = bgp_proc_arc.lock().await;
                                         match bgp_proc.adj_rib_in.routes.get_mut(&new_nlri) {
                                             Some(route_paths) => {
-                                                route_paths.push(new_route);
+                                                // don't add an exact matching route because it's most likely just being acked
+                                                // it only wastes CPU cycles
+                                                println!("new_route is {:#?}", new_route.nlri);
+                                                if !route_paths.contains(&new_route) {
+                                                    route_paths.push(new_route);
+                                                } else {
+                                                    println!("New route is already in BGP ADJ RIB IN")
+                                                }
                                             }
                                             None => {
                                                 bgp_proc.adj_rib_in.routes.insert(new_nlri, vec![new_route]);

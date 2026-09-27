@@ -50,7 +50,8 @@ pub enum MessageError {
     BadNotifErrorSubCode,
     BadMultiProtocolExtValue,
     UnknownCapability,
-    NoMPExtValAvailable
+    NoMPExtValAvailable,
+
 }
 
 #[derive(PartialEq, Debug)]
@@ -65,6 +66,7 @@ pub enum ProcessError {
     AS2Unhandled,
     AS4Unhandled,
     ASNumLenMismatch,
+    CannotCompareAS2vsAS4
 }
 
 #[derive(PartialEq, Debug)]

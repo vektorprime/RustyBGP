@@ -9,5 +9,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 default = "0.1.2"
 
-[profile.release]
+
+
+[profile.dev]
+opt-level = 0
 debug = true
