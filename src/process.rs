@@ -10,6 +10,8 @@ use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::Mutex;
 use tokio::sync::{mpsc, broadcast};
 use tokio::sync::mpsc::{Receiver, Sender};
+use anyhow::{Result, Error};
+
 use crate::config::*;
 use crate::errors::*;
 use crate::finite_state_machine::events::Event;
@@ -80,13 +82,14 @@ pub struct BGPProcess {
     // TODO changes to loc-rib generate events to all neighbors to send update
     pub adj_rib_in: RIB,
     pub local_rib: RIB,
+    pub log_tx: Sender<String>
 
-    //pub neighbors_channels: HashMap<Ipv4Addr, NeighborChannel>, // moved to it's own var so we can lock it separately from the bgp proc
+    //pub neighbors_channels: HashMap<Ipv4Addr, NeighborChannel>, // moved to its own var so we can lock it separately from the bgp proc
 }
 
 impl BGPProcess {
 
-    pub fn new(config_file_name: &str) -> Self {
+    pub fn new(config_file_name: &str, log_tx: Sender<String>) -> Self {
         let config = read_config_file(config_file_name);
 
         let global_settings = GlobalSettings {
@@ -114,6 +117,7 @@ impl BGPProcess {
             configured_networks: config.net_advertisements_config,
             adj_rib_in: RIB::new(),
             local_rib: RIB::new(),
+            log_tx,
             //neighbors_channels: HashMap::new(),
         }
     }
@@ -205,7 +209,7 @@ impl BGPProcess {
     //
     // }
 
-    pub fn validate_neighbor_ip_is_configured(&self, peer_ip: Ipv4Addr) -> Result<(), NeighborError> {
+    pub async fn validate_neighbor_ip_is_configured(&self, peer_ip: Ipv4Addr) -> Result<(), NeighborError> {
         // we don't have enough info to add the neighbor yet, so we just validate the IP for now
 
         if self.configured_neighbors.is_empty() {
@@ -214,7 +218,8 @@ impl BGPProcess {
         for cn in &self.configured_neighbors {
             // TODO refactor string comparison out as it's inefficient
             if peer_ip.to_string() == cn.ip {
-                 println!("Validated neighbor IP is in configured neighbors");
+                 //println!("Validated neighbor IP is in configured neighbors");
+                self.log_tx.send("Validated neighbor IP is in configured neighbors".to_string()).await;
                 return Ok(())
             }
             else {
@@ -286,6 +291,9 @@ impl BGPProcess {
         BGPProcess::generate_event_for_all_neighbors(&mut all_neighbors, Event::AutomaticStartWithPassiveTcpEstablishment).await;
         // end init
 
+        //log setup
+        let log_tx = bgp_proc_arc.lock().await.log_tx.clone();
+
 
         let listener = start_tcp(address.to_string(), port.to_string()).await;
         loop {
@@ -293,18 +301,21 @@ impl BGPProcess {
             // TODO generate events here for for overall process (also do it in neighbor run)
             match listener.accept().await {
                 Ok((mut tcp_stream, sa)) => {
-                    println!("TCP connection established from {}", sa.ip().to_string());
+                    //println!("TCP connection established from {}", sa.ip().to_string());
+                    log_tx.send(format!("TCP connection established from {}", sa.ip().to_string())).await;
                     let peer_ip = match get_neighbor_ipv4_address_from_socket(tcp_stream.peer_addr()) {
                         Ok(ip) => ip,
                         Err(e) => {
-                            println!("Error: TCP Socket error -  {:#?}, skipping", e);
+                            //println!("Error: TCP Socket error -  {:#?}, skipping", e);
+                            log_tx.send(format!("Error: TCP Socket error -  {:#?}, skipping", e)).await;
                             continue;
                         }
                     };
                     {
                         let bgp  = bgp_proc_arc.lock().await;
-                        if let Err(e) = bgp.validate_neighbor_ip_is_configured(peer_ip) {
-                            println!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
+                        if let Err(e) = bgp.validate_neighbor_ip_is_configured(peer_ip).await {
+                            // println!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
+                            log_tx.send(format!("Error: Unable to validate neighbor IP: {:#?}, skipping", e));
                             continue;
                         }
                     }
@@ -314,10 +325,12 @@ impl BGPProcess {
                         Some(n) => n,
                         None => {
                             // TODO split the first connection vs resuming/passing a new connection to neighbor into two different funcs
-                            println!("Unable to get neighbor object from all_neighbors, which means the neighbor loop is already running");
+                            //println!();
+                            log_tx.send(format!("Unable to get neighbor object from all_neighbors, which means the neighbor loop is already running")).await;
                             {
                                 let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
                                 println!("unlocked all_neighbors_channels_arc");
+                                log_tx.send(format!("unlocked all_neighbors_channels_arc")).await;
                                 if let Some(neighbor_channel) =  all_neighbors_channels.get_mut(&peer_ip) {
                                     println!("Got Some(neighbor_channel)");
                                     match neighbor_channel.send_tcp_conn_to_neighbor(tcp_stream) {
