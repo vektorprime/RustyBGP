@@ -21,7 +21,7 @@ use crate::utils::{extract_u16_from_bytes, extract_u32_from_bytes, extract_u8_fr
 //     match ts.peer_addr().unwrap().ip() {
 //         IpAddr::V4(ip) => {
 //             bgp_proc.neighbors.get(&ip).ok_or_else(|| NeighborError::PeerIPNotEstablished)?;
-//             println!("Validated neighbor is established");
+//             log::info!("Validated neighbor is established");
 //             return Ok(ip);
 //
 //         },
@@ -959,15 +959,15 @@ pub struct UpdateMessage {
 }
 
 pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<Capability>>) -> Result<UpdateMessage, MessageError> {
-    println!("Extracting update message");
+    log::info!("Extracting update message");
     let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
     if message_len < 23 {
         return Err(MessageError::MessageLenTooLow)
     }
-    //println!("message_len: {}", message_len);
+    //log::info!("message_len: {}", message_len);
     let withdrawn_route_len = extract_u16_from_bytes(tsbuf, 19, 21)?;
     if withdrawn_route_len > 0 {
-        println!("withdrawn route len is : {}", withdrawn_route_len);
+        log::info!("withdrawn route len is : {}", withdrawn_route_len);
     }
     
     let mut current_idx = 0;
@@ -976,13 +976,13 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
     let route_size = 4;
 
     let withdrawn_routes: Option<Vec<NLRI>> = if withdrawn_route_len >= route_and_len_size {
-        //println!("withdrawn_route_len is greater than or equal to route_size");
+        //log::info!("withdrawn_route_len is greater than or equal to route_size");
         let mut routes: Vec<NLRI> = Vec::new();
         for x in 0.. (withdrawn_route_len / route_and_len_size) as usize {
             current_idx = base_idx + (route_and_len_size as usize * x);
-            //println!("current_idx {}", current_idx);
+            //log::info!("current_idx {}", current_idx);
             let prefix_len = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
-            //println!("prefix_len {}", prefix_len);
+            //log::info!("prefix_len {}", prefix_len);
             current_idx += 1;
             // if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             ///
@@ -1001,16 +1001,16 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
 
             ///
             //let route_u32 = extract_u32_from_bytes(tsbuf, current_idx, current_idx + route_size as usize)?;
-            //println!("route_u32 {}", route_u32);
+            //log::info!("route_u32 {}", route_u32);
             match NLRI::new(route_u32, prefix_len) {
                 Ok(nl) => { routes.push(nl); },
                 Err(e) => {
-                    println!("Error: {:#?}", e);
+                    log::error!("Error: {:#?}", e);
                 }
             }
             // regardless we need to inc the idx
             current_idx += route_len_bytes;
-            //println!("current_idx {}", current_idx);
+            //log::info!("current_idx {}", current_idx);
         }
         Some(routes)
     } else {
@@ -1018,12 +1018,12 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
     };
 
     let mut current_idx = base_idx + withdrawn_route_len as usize;
-    //println!("current_idx {}", current_idx);
+    //log::info!("current_idx {}", current_idx);
 
     let total_path_attribute_len = extract_u16_from_bytes(tsbuf, current_idx, current_idx + 2)?;
-    //println!("total_path_attribute_len {}", total_path_attribute_len);
+    //log::info!("total_path_attribute_len {}", total_path_attribute_len);
     current_idx += 2;
-    //println!("current_idx {}", current_idx);
+    //log::info!("current_idx {}", current_idx);
     // if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
         // origin, aspath, next hop are the mandatory atts (24 total).
 
@@ -1033,53 +1033,53 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
         // The PAs are variable length here so we need to parse until we've read the whole msg len
         let mut pa_idx: usize = 0;
         while pa_idx < total_path_attribute_len as usize {
-            //println!("current_idx is less than message len, extracting path attributes");
+            //log::info!("current_idx is less than message len, extracting path attributes");
 
             let flags = {
                 // TODO handle these errors so we continue instead of returning from the func
                 let val = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
                 Flags::from_u8(val)
             };
-            //println!("flags {:#?}", flags);
+            //log::info!("flags {:#?}", flags);
 
             current_idx += 1;
             if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += 1;
-            //println!("current_idx {}", current_idx);
+            //log::info!("current_idx {}", current_idx);
 
             let type_code = {
                 let val = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
                 TypeCode::from_u8(val)
             }?;
-            //println!("type_code {:#?}", type_code);
+            //log::info!("type_code {:#?}", type_code);
 
             current_idx += 1;
             if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += 1;
-            //println!("current_idx {}", current_idx);
+            //log::info!("current_idx {}", current_idx);
 
             let len = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
             current_idx += 1;
             if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += 1;
-            //println!("current_idx {}", current_idx);
+            //log::info!("current_idx {}", current_idx);
 
             let data_bytes = {
                 let mut bytes: Vec<u8> = Vec::new();
                 for x in 0..len as usize {
                     match tsbuf.get(current_idx + x) {
                         Some(byte) => { bytes.push(*byte); },
-                        None => { println!("{:#?}", MessageError::InvalidBufferIndex) } // should not return error, just pass
+                        None => { log::info!("{:#?}", MessageError::InvalidBufferIndex) } // should not return error, just pass
                     }
                 }
                 bytes
             };
-            //println!("data_bytes {:#?}", data_bytes);
+            //log::info!("data_bytes {:#?}", data_bytes);
 
             current_idx += len as usize;
             if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             pa_idx += len as usize;
-            //println!("current_idx {}", current_idx);
+            //log::info!("current_idx {}", current_idx);
 
             // parse the bytes we just read for the PA
             //let data = extract_path_attributes_from_data(&data_bytes, total_path_attribute_len);
@@ -1088,15 +1088,15 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
                 // extract the PAdata object from the vec of bytes and create a new PathAtrribute object to be returned
                 // we use the optional parameters to determine differences in parsing (e.g., AS4 vs AS2)
                 let pa_data = PAdata::from_vec_u8(&type_code, &data_bytes, optional_parameters);
-                //println!("pa_data is  {:#?}", pa_data);
+                //log::info!("pa_data is  {:#?}", pa_data);
 
                 pa_collection.push(PathAttribute::new(flags, type_code, len, pa_data));
             }
         }
-        //println!("Option<Vec<PathAttribute>> has Some");
+        //log::info!("Option<Vec<PathAttribute>> has Some");
         Some(pa_collection)
     } else {
-        //println!("Option<Vec<PathAttribute>> has None");
+        //log::info!("Option<Vec<PathAttribute>> has None");
         None
     };
 
@@ -1108,7 +1108,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
 
 
     if current_idx == message_len as usize {
-        //println!("No NLRI in this message because current_idx == message_len");
+        //log::info!("No NLRI in this message because current_idx == message_len");
         return Err(MessageError::MissingNLRI)
     }
 
@@ -1148,18 +1148,18 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
     match NLRI::new(route_u32, prefix_len) {
         Ok(nl) => { nlri.push(nl); },
         Err(e) => {
-            println!("Error: {:#?}", e);
+            log::info!("Error: {:#?}", e);
         }
     }
     // regardless we need to inc the idx
     current_idx += route_len_bytes;
-    //println!("current_idx {}", current_idx);
+    //log::info!("current_idx {}", current_idx);
 
     if nlri.is_empty() {
-        //println!("returning None for NLRI vec");
+        //log::info!("returning None for NLRI vec");
         Ok(None)
     } else {
-        //println!("returning NLRI vec");
+        //log::info!("returning NLRI vec");
         Ok(Some(nlri))
     }
 }
@@ -1171,16 +1171,16 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
 //     // need to -1 below because we are already at the prefix len byte, if we didn't we'd end up with  4 bytes instead of 5
 //     // e.g. the 61st byte is the prefix len but the prefix is 62-65
 //     let nlri_count: usize = (message_len - (*current_idx - 1)) / route_size;
-//     //println!("message_len is  {:#?}", message_len);
-//     //println!("current_idx is  {:#?}", current_idx);
-//     //println!("nlri_count is  {:#?}", nlri_count);
+//     //log::info!("message_len is  {:#?}", message_len);
+//     //log::info!("current_idx is  {:#?}", current_idx);
+//     //log::info!("nlri_count is  {:#?}", nlri_count);
 //
 //     for i in 0..nlri_count {
 //         let len: Option<u8> = {
 //             match tsbuf.get(*current_idx) {
 //                 Some(l) => {
 //                     *current_idx += 1;
-//                     //println!("Some(l) is  {:#?}", l);
+//                     //log::info!("Some(l) is  {:#?}", l);
 //                     Some(l.clone())
 //                 },
 //                 None => None
@@ -1190,27 +1190,27 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
 //         let prefix = match tsbuf.get(*current_idx..=*current_idx + 3) {
 //             Some(p) => {
 //                 *current_idx += 4;
-//                 //println!("Some(p) is  {:#?}", p);
+//                 //log::info!("Some(p) is  {:#?}", p);
 //                 Some(p)
 //             },
 //             None => None
 //         };
 //         if len.is_some() && prefix.is_some() {
-//             //println!("creating nlri struct");
+//             //log::info!("creating nlri struct");
 //             let rt = NLRI {
 //                 len: len.unwrap(),
 //                 //prefix: u32::from_be_bytes(prefix.unwrap().try_into().unwrap())
 //                 prefix: Ipv4Addr::from_bits(u32::from_be_bytes(prefix.unwrap().try_into().unwrap()))
 //             };
-//             //println!("rt is  {:#?}", rt);
+//             //log::info!("rt is  {:#?}", rt);
 //             nlri.push(rt);
 //         }
 //     }
 //     if nlri.is_empty() {
-//         //println!("returning None for NLRI vec");
+//         //log::info!("returning None for NLRI vec");
 //         None
 //     } else {
-//         //println!("returning NLRI vec");
+//         //log::info!("returning NLRI vec");
 //         Some(nlri)
 //     }
 // }
@@ -1292,7 +1292,7 @@ impl UpdateMessage {
                             path_att_bytes.extend(pa_bytes);
                         },
                         Err(e) => {
-                            println!("Error converting PA to bytes: {:#?}", e);
+                            log::info!("Error converting PA to bytes: {:#?}", e);
                         }
                     }
                 }

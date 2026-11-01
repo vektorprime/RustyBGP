@@ -352,7 +352,7 @@ impl BGPProcess {
                     let (tx_event_channel_watcher, rx_event_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(5);
                     neighbor.tx_event_channel_watcher = Some(tx_event_channel_watcher);
                     neighbor.generate_event(Event::TcpCRAcked);
-                    println!("Generated Event::TcpCRAcked");
+                   // println!("Generated Event::TcpCRAcked");
                     log::info!("Generated Event::TcpCRAcked");
                     tokio::spawn(async move {
                         log::info!("Moving neighbor to async task and executing run_neighbor_loop");

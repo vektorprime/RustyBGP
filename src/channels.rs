@@ -47,13 +47,13 @@ impl NeighborChannel {
 
     pub async fn send_route(&self, route: RouteV4, tx_channel_watcher: &mpsc::Sender<ChannelWatcherMessage>) {
         //if self.is_active {
-        println!("Sending route {:#?} to BGP Proc", route.nlri);
+        log::info!("Sending route {:#?} to BGP Proc", route.nlri);
         if let Err(e) = self.tx.send(ChannelMessage::Route(route)).await {
-            println!("ERROR in send_route - {:#?}", e);
+            log::error!("ERROR in send_route - {:#?}", e);
         }
-        println!("Sending ChannelWatcherMessage::MessageWaiting to BGP Proc");
+        log::info!("Sending ChannelWatcherMessage::MessageWaiting to BGP Proc");
         if let Err(e) = tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await {
-            println!("ERROR in send_route - {:#?}", e);
+            log::error!("ERROR in send_route - {:#?}", e);
         }
     }
 
@@ -62,7 +62,7 @@ impl NeighborChannel {
         //if self.is_active {
         for route in routes {
             if let Err(e) = self.tx.send(ChannelMessage::Route(route.clone())).await {
-                println!("ERROR in send_route_vec - {:#?}", e);
+                log::error!("ERROR in send_route_vec - {:#?}", e);
             }
         }
         // does not need tx_channel_watcher because it's only used in run_recv_message_channel_loop in the proc, not in the neighbor.
@@ -74,15 +74,15 @@ impl NeighborChannel {
     pub async fn withdraw_route(&self, nlri_vec: Vec<NLRI>, tx_channel_watcher: &mpsc::Sender<ChannelWatcherMessage>) {
         //if self.is_active {
         if let Err(e) = self.tx.send(ChannelMessage::WithdrawRoute(nlri_vec)).await {
-            println!("ERROR in send_route_vec - {:#?}", e);
+            log::error!("ERROR in send_route_vec - {:#?}", e);
         }
         if let Err(e) = tx_channel_watcher.send(ChannelWatcherMessage::MessageWaiting).await {
-            println!("ERROR in send_route_vec - {:#?}", e);
+            log::error!("ERROR in send_route_vec - {:#?}", e);
         }
     }
 
     pub fn recv_tcp_conn_from_bgp_proc(&mut self) -> Option<TcpStream> {
-        println!("executing recv_tcp_conn_from_bgp_proc");
+        log::info!("executing recv_tcp_conn_from_bgp_proc");
         if let Ok(ChannelMessage::TcpEstablished(tcp_stream)) = self.rx.try_recv() {
             return Some(tcp_stream)
         }
@@ -90,7 +90,7 @@ impl NeighborChannel {
     }
 
     pub fn send_tcp_conn_to_neighbor(&self, tcp_stream: TcpStream) -> Result<(), EventError> {
-        println!("executing send_tcp_conn_to_neighbor");
+        log::info!("executing send_tcp_conn_to_neighbor");
         // This func doesn't need ChannelWatcherMessage because it runs only in run_process_loop.
         // ChannelWatcherMessage is really for sending an unlock signal from neighbor to proc loop.
         self.tx.try_send(ChannelMessage::TcpEstablished(tcp_stream)).map_err(|_| EventError::ChannelDown)

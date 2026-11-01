@@ -52,7 +52,7 @@ impl MPExtVal {
                 Ok(MPExtVal::IPv6VPN)
             },
             (_, _) => {
-                println!("MultiProtocol afi and safi not recognized, defaulting");
+                log::info!("MultiProtocol afi and safi not recognized, defaulting");
                 Err(MessageError::BadMultiProtocolExtValue)
             }
 
@@ -126,7 +126,7 @@ impl Capability {
                 }
             },
             _ => {
-                println!("Unimplemented match arm in Capability::convert_to_bytes()");
+                log::info!("Unimplemented match arm in Capability::convert_to_bytes()");
                 return Err(MessageError::UnknownCapability)
             }
 

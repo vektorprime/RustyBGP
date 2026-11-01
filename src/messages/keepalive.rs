@@ -13,13 +13,13 @@ use crate::messages::*;
 pub async fn send_keepalive(stream: &mut OwnedWriteHalf) -> Result<(), MessageError> {
     //TODO add peer as input var and match against DB
     //TODO add periodic keepalives
-    println!("Preparing to send Keepalive");
+    log::info!("Preparing to send Keepalive");
     let message = KeepaliveMessage::new()?;
     let message_bytes = message.convert_to_bytes();
     let ts = stream.write_all(&message_bytes[..]).await;
     match ts {
         Ok(_) => {
-            println!("Sent Keepalive");
+            log::info!("Sent Keepalive");
             Ok(())
         },
         Err(_) => {

@@ -183,13 +183,13 @@ pub fn get_neighbor_ipv4_address_from_stream(tcp_stream: &TcpStream) -> Result<I
 
 
 pub async fn send_open(stream: &mut OwnedWriteHalf, message: OpenMessage) -> Result<(), MessageError> {
-    println!("Preparing to send Open");
+    log::info!("Preparing to send Open");
     match message.convert_to_bytes() {
         Ok(message_bytes) => {
             let res  =stream.write_all(&message_bytes[..]).await;
             match res {
                 Ok(_) => {
-                    println!("Sent Open");
+                    log::info!("Sent Open");
                     Ok(())
                 },
                 Err(_) => {
@@ -204,12 +204,12 @@ pub async fn send_open(stream: &mut OwnedWriteHalf, message: OpenMessage) -> Res
 }
 
 pub async fn send_update(stream: &mut OwnedWriteHalf, message: UpdateMessage, capabilities: &Option<Vec<Capability>>) -> Result<(), MessageError> {
-    println!("Preparing to send Update");
+    log::info!("Preparing to send Update");
     let message_bytes = message.convert_to_bytes(capabilities);
     let res  =stream.write_all(&message_bytes[..]).await;
     match res {
         Ok(_) => {
-            println!("Sent Update");
+            log::info!("Sent Update");
             Ok(())
         },
         Err(_) => {
