@@ -302,12 +302,12 @@ impl BGPProcess {
             match listener.accept().await {
                 Ok((mut tcp_stream, sa)) => {
                     //println!("TCP connection established from {}", sa.ip().to_string());
-                    log_tx.send(format!("TCP connection established from {}", sa.ip().to_string())).await;
+                    log_tx.try_send(format!("TCP connection established from {}", sa.ip().to_string()));
                     let peer_ip = match get_neighbor_ipv4_address_from_socket(tcp_stream.peer_addr()) {
                         Ok(ip) => ip,
                         Err(e) => {
                             //println!("Error: TCP Socket error -  {:#?}, skipping", e);
-                            log_tx.send(format!("Error: TCP Socket error -  {:#?}, skipping", e)).await;
+                            log_tx.try_send(format!("Error: TCP Socket error -  {:#?}, skipping", e));
                             continue;
                         }
                     };
@@ -315,7 +315,7 @@ impl BGPProcess {
                         let bgp  = bgp_proc_arc.lock().await;
                         if let Err(e) = bgp.validate_neighbor_ip_is_configured(peer_ip).await {
                             // println!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
-                            log_tx.send(format!("Error: Unable to validate neighbor IP: {:#?}, skipping", e));
+                            log_tx.try_send(format!("Error: Unable to validate neighbor IP: {:#?}, skipping", e));
                             continue;
                         }
                     }
@@ -326,16 +326,23 @@ impl BGPProcess {
                         None => {
                             // TODO split the first connection vs resuming/passing a new connection to neighbor into two different funcs
                             //println!();
-                            log_tx.send(format!("Unable to get neighbor object from all_neighbors, which means the neighbor loop is already running")).await;
+                            log_tx.try_send(format!("Unable to get neighbor object from all_neighbors, which means the neighbor loop is already running"));
                             {
                                 let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
-                                println!("unlocked all_neighbors_channels_arc");
-                                log_tx.send(format!("unlocked all_neighbors_channels_arc")).await;
+                                //println!("unlocked all_neighbors_channels_arc");
+                                log_tx.try_send(format!("unlocked all_neighbors_channels_arc"));
                                 if let Some(neighbor_channel) =  all_neighbors_channels.get_mut(&peer_ip) {
-                                    println!("Got Some(neighbor_channel)");
+                                    //println!("Got Some(neighbor_channel)");
+                                    log_tx.try_send(format!("Got Some(neighbor_channel)"));
                                     match neighbor_channel.send_tcp_conn_to_neighbor(tcp_stream) {
-                                        Ok(_) => {println!("Sent TCP connection in neighbor channel")}
-                                        Err(e) => {println!("ERROR: Unable to send TCP connection in channel - {:#?}", e)}
+                                        Ok(_) => {
+                                            //println!("Sent TCP connection in neighbor channel")
+                                            log_tx.try_send(format!("Sent TCP connection in neighbor channel"));
+                                        }
+                                        Err(e) => {
+                                            //println!("ERROR: Unable to send TCP connection in channel - {:#?}", e)
+                                            log_tx.try_send(format!("ERROR: Unable to send TCP connection in channel - {:#?}", e));
+                                        }
                                     }
                                 }
                             }
