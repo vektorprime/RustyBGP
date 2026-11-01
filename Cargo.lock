@@ -60,6 +60,7 @@ dependencies = [
  "anyhow",
  "crossterm",
  "default",
+ "log",
  "ratatui",
  "serde",
  "tokio",
