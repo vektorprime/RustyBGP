@@ -33,7 +33,7 @@ async fn main()  {
     let (log_tx, log_rx) = mpsc::channel::<String>(255);
     let logger = BGPLogger { tx: log_tx.clone() };
     log::set_boxed_logger(Box::new(logger)).unwrap();
-    log::set_max_level(log::LevelFilter::Info);
+    log::set_max_level(log::LevelFilter::Debug);
     tui::init_tui(log_rx);
     //let mut bgp = BGPProcess::new("bgp_config.toml".to_string());
     let mut bgp: Arc<Mutex<BGPProcess>> = Arc::new(Mutex::new(BGPProcess::new("bgp_config.toml")));
