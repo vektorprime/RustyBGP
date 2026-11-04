@@ -31,7 +31,7 @@ async fn start_tcp(address: String, port: String) -> TcpListener {
     match listener {
         Ok(tcp) => {
             //println!("TCP server started on port {} ", port);
-            println!("TCP server started on port {} ", port);
+            log::info!("TCP server started on port {} ", port);
             tcp
         },
         Err(e) => {

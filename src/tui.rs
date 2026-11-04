@@ -13,7 +13,7 @@ use ratatui::{
 };
 use ratatui::layout::{Alignment, Constraint, Layout, Margin};
 use ratatui::prelude::StatefulWidget;
-use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap};
 use tokio::sync::mpsc::{Receiver};
 
 
@@ -32,12 +32,13 @@ enum ScrollBarDirection {
 
 #[derive(Debug)]
 pub struct Tui {
-    pub exit: bool,
+    pub quit: bool,
     pub rx_log: Receiver<String>,
     pub log_history: VecDeque<String>,
     pub scroll_position: usize,
     pub scroll_state: ScrollbarState,
     pub scroll_text_len: usize,
+    pub auto_scroll: bool,
 }
 
 impl Tui {
@@ -45,16 +46,17 @@ impl Tui {
         let mut log_history: Vec<String> = Vec::new();
         log_history.reserve(65536);
         Tui {
-            exit: false,
+            quit: false,
             rx_log,
             log_history: VecDeque::new(),
             scroll_position: 0,
             scroll_state: ScrollbarState::new(0),
             scroll_text_len: 0,
+            auto_scroll: true,
         }
     }
     pub fn run_loop(&mut self, terminal: &mut DefaultTerminal)  {
-        while !self.exit {
+        while !self.quit {
             match self.rx_log.try_recv() {
                 Ok(rx_msg) => {
                     // rotate the log
@@ -118,7 +120,8 @@ impl Tui {
                 log::info!("SHIFT + TAB detected");
             },
             KeyCode::Char('q') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
-                log::info!("CTRL + Q detected");
+                //log::info!("CTRL + Q detected");
+                self.quit = true;
             }
             KeyCode::Left => {
 
@@ -127,13 +130,25 @@ impl Tui {
 
             },
             KeyCode::Up => {
-                log::info!("Up arrow detected");
+                //log::info!("Up arrow detected");
                 self.scroll(5, ScrollBarDirection::Up);
             },
             KeyCode::Down => {
-                log::info!("Down arrow detected");
+                //log::info!("Down arrow detected");
                 self.scroll(5, ScrollBarDirection::Down);
             },
+            KeyCode::Char('s') => {
+                //log::info!("CTRL + Q detected");
+                log::info!("S detected");
+                log::info!("toggling auto-scroll");
+                if self.auto_scroll {
+                    self.auto_scroll = false;
+                }
+                else {
+                    self.auto_scroll = true;
+                }
+
+            }
             _ => {}
         }
     }
@@ -156,42 +171,74 @@ impl Tui {
 impl Widget for &Tui {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let title = Line::from(" Rusty BGP ".bold());
+
+        let inst_auto_scroll = if self.auto_scroll {
+            "<S> ".green().bold()
+        } else {
+            "<S> ".red().bold()
+        };
+
         let instructions = Line::from(vec![
             " Decrement ".into(),
             "<Left>".blue().bold(),
             " Increment ".into(),
             "<Right>".blue().bold(),
-            " Switch View".into(),
-            " <SHIFT + TAB>".blue().bold(),
+            " Switch View ".into(),
+            "<SHIFT + TAB>".blue().bold(),
             " Quit ".into(),
-            "<CTRL + Q> ".blue().bold(),
+            "<CTRL + Q>".blue().bold(),
+            " Auto-Scroll ".into(),
+            inst_auto_scroll,
         ]);
+
         let block = Block::bordered()
             .title(title.centered())
             .title_bottom(instructions.centered())
             .border_set(border::THICK);
 
-
-
-        let mut text = String::new();
-        for entry in &self.log_history {
-            text = text + entry + "\n";
-        }
-        let mut text_len = 0;
         let mut vec_text = Vec::new();
         for entry in &self.log_history {
-            text_len += entry.len();
             vec_text.push(Line::from(entry.clone()));
         };
 
-        let vec_text_len = vec_text.len();
-        Paragraph::new(vec_text)
-            .left_aligned()
-            .block(block)
-            .scroll((self.scroll_position as u16, 0))
-            .render(area, buf);
+        // TODO determine if we'll keep unstable feat.
+        // I'm not sure if I want to keep unstable features just for getting the scroll line correct, I was only off by a few
+        //let vec_text_len = vec_text.len();
+        //let auto_scroll_position = self.log_history.len().saturating_sub(area.height as usize);
+        // let paragraph =  if self.auto_scroll {
+        //     Paragraph::new(vec_text)
+        //         .left_aligned()
+        //         .block(block)
+        //         .wrap(Wrap{ trim: true })
+        //         .scroll((auto_scroll_position as u16, 0))
+        // } else {
+        //     Paragraph::new(vec_text)
+        //         .left_aligned()
+        //         .block(block)
+        //         .wrap(Wrap{ trim: true })
+        //         .scroll((self.scroll_position as u16, 0))
+        // };
 
-        let mut state = ScrollbarState::new(vec_text_len).position(self.scroll_position);
+        let mut paragraph = Paragraph::new(vec_text)
+                .left_aligned()
+                .block(block)
+                .wrap(Wrap{ trim: true });
+        let auto_scroll_position = paragraph.line_count(area.width.saturating_sub(2))
+            .saturating_sub(area.height as usize);
+        if self.auto_scroll {
+            paragraph = paragraph.scroll((auto_scroll_position as u16, 0));
+        } else {
+            paragraph = paragraph.scroll((self.scroll_position as u16, 0));
+        }
+       // log::info!("{}",area.height);
+
+        paragraph.render(area, buf);
+
+        let mut state = if self.auto_scroll {
+            ScrollbarState::new(self.log_history.len()).position(auto_scroll_position)
+        } else {
+            ScrollbarState::new(self.log_history.len()).position(self.scroll_position)
+        };
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
 
         StatefulWidget::render(
@@ -201,8 +248,6 @@ impl Widget for &Tui {
             &mut state,
         );
 
-
-        //self.render_vertical_scroll(&vec_text, &chunks)
     }
 
 

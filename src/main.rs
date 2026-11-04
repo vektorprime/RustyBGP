@@ -37,7 +37,7 @@ async fn main()  {
     tui::init_tui(log_rx);
     //let mut bgp = BGPProcess::new("bgp_config.toml".to_string());
     let mut bgp: Arc<Mutex<BGPProcess>> = Arc::new(Mutex::new(BGPProcess::new("bgp_config.toml")));
-    println!("{:#?}", bgp);
+    log::info!("{:#?}", bgp);
     // todo read the IP and port from config file
     BGPProcess::run_process_loop(bgp, "10.0.0.3", "179").await;
 

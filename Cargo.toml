@@ -8,10 +8,20 @@ toml = "0.9.8"
 serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 default = "0.1.2"
-ratatui = "0.30.2"
+ratatui = {
+    version = "0.30.2",
+    features = [
+        "std",
+        "unstable-rendered-line-info"
+    ]
+}
 crossterm = "0.29.0"
 anyhow = "1.0.104"
-log = { version = "0.4.35", features = ["std"] }
+log = {
+    version = "0.4.35",
+    features = ["std"]
+}
+
 
 
 
