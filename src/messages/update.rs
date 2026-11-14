@@ -1145,24 +1145,15 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
 
         let route_u32 = Ipv4Addr::from_octets(nlri_bytes);
 
-    match NLRI::new(route_u32, prefix_len) {
-        Ok(nl) => { nlri.push(nl); },
-        Err(e) => {
-            log::info!("Error: {:#?}", e);
-        }
-    }
-    // regardless we need to inc the idx
-    current_idx += route_len_bytes;
-    //log::info!("current_idx {}", current_idx);
         match NLRI::new(route_u32, prefix_len) {
             Ok(nl) => { nlri.push(nl); },
             Err(e) => {
-                println!("Error: {:#?}", e);
+                log::error!("Error: {:#?}", e);
             }
         }
         // regardless we need to inc the idx
         current_idx += route_len_bytes;
-        //println!("current_idx {}", current_idx);
+        //log::info!("current_idx {}", current_idx);
     }
 
     if nlri.is_empty() {
@@ -1174,7 +1165,6 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
     }
 
 }
-
 
 // pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: &mut usize) -> Option<Vec<NLRI>> {
 //     let route_size: usize = 5;
