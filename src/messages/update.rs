@@ -1165,7 +1165,6 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
         //println!("returning NLRI vec");
         Ok(Some(nlri))
     }
-
 }
 
 
