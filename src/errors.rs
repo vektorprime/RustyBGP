@@ -31,7 +31,7 @@ pub enum MessageError {
     BadInt8Read,
     BadInt16Read,
     BadInt32Read,
-    InvalidBufferIndex,
+    BadBufferIndex,
     BadBGPVersion,
     PeerIPNotEstablished,
     MissingNLRI,
@@ -51,6 +51,7 @@ pub enum MessageError {
     BadMultiProtocolExtValue,
     UnknownCapability,
     NoMPExtValAvailable,
+    BadPrefixLen,
 
 }
 
