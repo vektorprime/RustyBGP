@@ -976,6 +976,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
     let route_size = 4;
 
     let withdrawn_routes: Option<Vec<NLRI>> = if withdrawn_route_len >= route_and_len_size {
+        // TODO come back here and use the extract_nlri func to handle multiple withdrawn nlri correctly
         //log::info!("withdrawn_route_len is greater than or equal to route_size");
         let mut routes: Vec<NLRI> = Vec::new();
         for x in 0.. (withdrawn_route_len / route_and_len_size) as usize {
@@ -986,7 +987,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
             current_idx += 1;
             // if current_idx >= message_len as usize {return Err(MessageError::UpdateMessageLenAndIdxMismatch)}
             ///
-            let route_len_bytes = get_route_len_bytes(prefix_len);
+            let route_len_bytes = get_route_len_bytes(prefix_len)?;
             let mut nlri_bytes: [u8; 4] = [0, 0, 0, 0];
             for x in 0..route_len_bytes {
                 nlri_bytes[x] = tsbuf[current_idx + x];
@@ -1069,7 +1070,7 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
                 for x in 0..len as usize {
                     match tsbuf.get(current_idx + x) {
                         Some(byte) => { bytes.push(*byte); },
-                        None => { log::info!("{:#?}", MessageError::InvalidBufferIndex) } // should not return error, just pass
+                        None => { log::info!("{:#?}", MessageError::BadBufferIndex) } // should not return error, just pass
                     }
                 }
                 bytes
@@ -1121,22 +1122,23 @@ pub fn extract_update_message(tsbuf: &Vec<u8>, optional_parameters: &Option<Vec<
 
 }
 
-pub fn get_route_len_bytes(prefix_len: u8) -> usize {
+pub fn get_route_len_bytes(prefix_len: u8) -> Result<usize, MessageError>  {
     match prefix_len {
-        25..=32 => { 4 },
-        17..=24 => { 3 },
-        9..=16  => { 2 },
-        0..=8 =>   { 1 },
+        25..=32 => { Ok(4) },
+        17..=24 => { Ok(3) },
+        9..=16  => { Ok(2) },
+        0..=8 =>   { Ok(1) },
         _ => {
-            panic!("Unhandled netmask size in NLRI");
+            Err(MessageError::BadPrefixLen)
         }
     }
 }
 pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: usize) -> Result<Option<Vec<NLRI>>,MessageError> {
     let mut nlri = Vec::new();
     while current_idx != message_len {
+        // TODO handle the scenario where we have one valid NLRI but the next one causes an error, print an error and return the valid NLRI
         let prefix_len = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
-        let route_len_bytes = get_route_len_bytes(prefix_len);
+        let route_len_bytes = get_route_len_bytes(prefix_len)?;
         current_idx += 1;
         let mut nlri_bytes: [u8; 4] = [0, 0, 0, 0];
         for x in 0..route_len_bytes {
@@ -1360,4 +1362,144 @@ impl UpdateMessage {
 
         message
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    mod test_extract_nlri_from_update_message {
+        use super::*;
+        #[test]
+        fn test_extract_ok_nlri() {
+            // These 57 bytes contain an update message with 2 NLRI: 192.168.255.1/32 and 192.168.255.2/32
+            let msg_bytes: Vec<u8> = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0x00, 0x39, 0x02, 0x00, 0x00, 0x00, 0x18, 0x40, 0x01, 0x01, 0x00, 0x40, 0x02, 0x0a, 0x02, 0x02,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x40, 0x03, 0x04, 0x0a, 0x00, 0x00, 0x18, 0x20,
+                0xc0, 0xa8, 0xff, 0x01, 0x20, 0xc0, 0xa8, 0xff, 0x02
+            ];
+            let result = extract_nlri_from_update_message(&msg_bytes, 57, 47);
+            // The bytes are valid so this should always return ok
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_extract_ok_some_nlri() {
+            // These 57 bytes contain an update message with 2 NLRI: 192.168.255.1/32 and 192.168.255.2/32
+            let msg_bytes: Vec<u8> = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0x00, 0x39, 0x02, 0x00, 0x00, 0x00, 0x18, 0x40, 0x01, 0x01, 0x00, 0x40, 0x02, 0x0a, 0x02, 0x02,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x40, 0x03, 0x04, 0x0a, 0x00, 0x00, 0x18, 0x20,
+                0xc0, 0xa8, 0xff, 0x01, 0x20, 0xc0, 0xa8, 0xff, 0x02
+            ];
+            let result = extract_nlri_from_update_message(&msg_bytes, 57, 47);
+            // The bytes are valid so this unwrapped result should return some from the option
+            assert!(result.unwrap().is_some());
+        }
+
+        #[test]
+        fn test_extract_2_nlri() {
+            // These 57 bytes contain an update message with 2 NLRI: 192.168.255.1/32 and 192.168.255.2/32
+            let msg_bytes: Vec<u8> = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0x00, 0x39, 0x02, 0x00, 0x00, 0x00, 0x18, 0x40, 0x01, 0x01, 0x00, 0x40, 0x02, 0x0a, 0x02, 0x02,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x40, 0x03, 0x04, 0x0a, 0x00, 0x00, 0x18, 0x20,
+                0xc0, 0xa8, 0xff, 0x01, 0x20, 0xc0, 0xa8, 0xff, 0x02
+            ];
+            let result = extract_nlri_from_update_message(&msg_bytes, 57, 47);
+            // We should have 2 NLRI
+            assert_eq!(2, result.unwrap().unwrap().len());
+        }
+
+        #[test]
+        fn test_extract_2_exact_nlri() {
+            // These 57 bytes contain an update message with 2 NLRI: 192.168.255.1/32 and 192.168.255.2/32
+            let msg_bytes: Vec<u8> = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0x00, 0x39, 0x02, 0x00, 0x00, 0x00, 0x18, 0x40, 0x01, 0x01, 0x00, 0x40, 0x02, 0x0a, 0x02, 0x02,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x40, 0x03, 0x04, 0x0a, 0x00, 0x00, 0x18, 0x20,
+                0xc0, 0xa8, 0xff, 0x01, 0x20, 0xc0, 0xa8, 0xff, 0x02
+            ];
+            let result = extract_nlri_from_update_message(&msg_bytes, 57, 47);
+            // We should have 2 NLRI
+
+            let check_nlri_1 = result.as_ref().unwrap().as_ref().unwrap();
+            let expected_nlri_1 = NLRI {
+                len: 32,
+                prefix: Ipv4Addr::new(192, 168, 255, 1)
+            };
+            assert_eq!(expected_nlri_1, check_nlri_1[0]);
+
+            let check_nlri_2 = result.as_ref().unwrap().as_ref().unwrap();
+            let expected_nlri_2 = NLRI {
+                len: 32,
+                prefix: Ipv4Addr::new(192, 168, 255, 2)
+            };
+            assert_eq!(expected_nlri_2, check_nlri_2[1]);
+        }
+        #[test]
+        fn test_extract_1_nlri() {
+            // These 65 bytes contain an update message with 2 NLRI: 192.168.255.0/24
+            let msg_bytes: Vec<u8> = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0x00, 0x41, 0x02, 0x00, 0x00, 0x00, 0x26, 0x40, 0x01, 0x01, 0x00, 0x40, 0x02, 0x0a, 0x02, 0x02,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0xc0, 0x07, 0x08, 0x00, 0x00, 0x00, 0x03, 0xc0,
+                0xa8, 0xc8, 0x02, 0x40, 0x06, 0x00, 0x40, 0x03, 0x04, 0x0a, 0x00, 0x00, 0x18, 0x18, 0xc0, 0xa8,
+                0xff
+
+            ];
+            let result = extract_nlri_from_update_message(&msg_bytes, 65, 61);
+            // We should have 1 NLRI
+            assert_eq!(1, result.unwrap().unwrap().len());
+        }
+
+        #[test]
+        fn test_extract_1_exact_nlri() {
+            // These 65 bytes contain an update message with 2 NLRI: 192.168.255.0/24
+            let msg_bytes: Vec<u8> = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0x00, 0x41, 0x02, 0x00, 0x00, 0x00, 0x26, 0x40, 0x01, 0x01, 0x00, 0x40, 0x02, 0x0a, 0x02, 0x02,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0xc0, 0x07, 0x08, 0x00, 0x00, 0x00, 0x03, 0xc0,
+                0xa8, 0xc8, 0x02, 0x40, 0x06, 0x00, 0x40, 0x03, 0x04, 0x0a, 0x00, 0x00, 0x18, 0x18, 0xc0, 0xa8,
+                0xff
+            ];
+            let result = extract_nlri_from_update_message(&msg_bytes, 65, 61);
+            // We should have 1 NLRI
+            let check_nlri_1 = result.as_ref().unwrap().as_ref().unwrap();
+            let expected_nlri_1 = NLRI {
+                len: 24,
+                prefix: Ipv4Addr::new(192, 168, 255, 0)
+            };
+            assert_eq!(expected_nlri_1, check_nlri_1[0]);
+        }
+
+        #[test]
+        fn test_extract_err_nlri() {
+            // These 65 bytes contain an update message with 2 NLRI: 192.168.255.0/24 except I changed the /24 to /255 (0xff)
+            let msg_bytes: Vec<u8> = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0x00, 0x41, 0x02, 0x00, 0x00, 0x00, 0x26, 0x40, 0x01, 0x01, 0x00, 0x40, 0x02, 0x0a, 0x02, 0x02,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0xc0, 0x07, 0x08, 0x00, 0x00, 0x00, 0x03, 0xc0,
+                0xa8, 0xc8, 0x02, 0x40, 0x06, 0x00, 0x40, 0x03, 0x04, 0x0a, 0x00, 0x00, 0x18, 0xff, 0xc0, 0xa8,
+                0xff
+            ];
+            let result = extract_nlri_from_update_message(&msg_bytes, 65, 61);
+            // We should have an error
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_extract_ok_no_nlri() {
+            // These 23 bytes contain an empty update message
+            let msg_bytes: Vec<u8> = vec![
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0x00, 0x17, 0x02, 0x00, 0x00, 0x00, 0x00
+            ];
+            let result = extract_nlri_from_update_message(&msg_bytes, 23, 23);
+            // We should have 0 NLRI
+            assert!(result.unwrap().is_none());
+            //assert_eq!(expected_nlri_1, check_nlri_1[0]);
+        }
+    }
+
 }
