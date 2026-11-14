@@ -1133,27 +1133,28 @@ pub fn get_route_len_bytes(prefix_len: u8) -> usize {
     }
 }
 pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: usize) -> Result<Option<Vec<NLRI>>,MessageError> {
-
     let mut nlri = Vec::new();
-    let prefix_len = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
-    let mut route_len_bytes = get_route_len_bytes(prefix_len);
-    current_idx += 1;
-    let mut nlri_bytes: [u8; 4] = [0, 0, 0, 0];
-    for x in 0..route_len_bytes {
-        nlri_bytes[x] = tsbuf[current_idx + x];
-    }
-
-    let route_u32 = Ipv4Addr::from_octets(nlri_bytes);
-
-    match NLRI::new(route_u32, prefix_len) {
-        Ok(nl) => { nlri.push(nl); },
-        Err(e) => {
-            println!("Error: {:#?}", e);
+    while current_idx != message_len {
+        let prefix_len = extract_u8_from_bytes(tsbuf, current_idx, current_idx + 1)?;
+        let route_len_bytes = get_route_len_bytes(prefix_len);
+        current_idx += 1;
+        let mut nlri_bytes: [u8; 4] = [0, 0, 0, 0];
+        for x in 0..route_len_bytes {
+            nlri_bytes[x] = tsbuf[current_idx + x];
         }
+
+        let route_u32 = Ipv4Addr::from_octets(nlri_bytes);
+
+        match NLRI::new(route_u32, prefix_len) {
+            Ok(nl) => { nlri.push(nl); },
+            Err(e) => {
+                println!("Error: {:#?}", e);
+            }
+        }
+        // regardless we need to inc the idx
+        current_idx += route_len_bytes;
+        //println!("current_idx {}", current_idx);
     }
-    // regardless we need to inc the idx
-    current_idx += route_len_bytes;
-    //println!("current_idx {}", current_idx);
 
     if nlri.is_empty() {
         //println!("returning None for NLRI vec");
@@ -1162,6 +1163,7 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
         //println!("returning NLRI vec");
         Ok(Some(nlri))
     }
+
 }
 
 
