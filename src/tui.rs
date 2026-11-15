@@ -209,9 +209,9 @@ impl Widget for &Tui {
         };
 
         let instructions = Line::from(vec![
-            " Decrement ".into(),
+            " Move Out ".into(),
             "<Left>".blue().bold(),
-            " Increment ".into(),
+            " Move In ".into(),
             "<Right>".blue().bold(),
             " Switch View ".into(),
             "<SHIFT + TAB>".blue().bold(),
@@ -304,15 +304,21 @@ impl Widget for &Tui {
                     .border_set(border::THICK);
 
                 //let header = Row::new(vec!["Prefix", "Next Hop", "Local Pref", "Origin", "AS Path", "MED"]);
-                let header = Row::new(vec!["Prefix", "Next Hop"]);
+                let header = Row::new(vec!["Prefix","Len", "Next Hop"]);
                 let mut rows = Vec::new();
                 if let Some(rib) = &self.rib {
                     for (nlri, routes) in &rib.routes {
-                            rows.push(Row::new(vec![nlri.prefix.to_string(), nlri.len.to_string()]));
+                           // rows.push(Row::new(vec![nlri.prefix.to_string(), nlri.len.to_string()]));
+                        for route in routes {
+                            rows.push(Row::new(vec![route.nlri.prefix.to_string(), route.nlri.len.to_string(), route.next_hop.ipv4addr.to_string()]))
+                        }
                     }
-                }
-                let widths = [Constraint::Length(5), Constraint::Length(5)];
-                let table = Table::new(rows, widths).block(block).header(header);
+            }
+                let widths = [Constraint::Percentage(20),Constraint::Percentage(10), Constraint::Length(20)];
+                let table = Table::new(rows, widths)
+                    .block(block).
+                    header(header)
+                    .column_spacing(1);
                 let mut table_state = TableState::default().with_selected(self.table_position);
                 StatefulWidget::render(
                   table,

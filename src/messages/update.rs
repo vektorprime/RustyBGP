@@ -409,7 +409,7 @@ impl AsPath {
 pub struct NextHop {
     category: Category,
     // TODO handle other sizes
-    ipv4addr: Ipv4Addr,
+    pub ipv4addr: Ipv4Addr,
 }
 
 impl NextHop {
