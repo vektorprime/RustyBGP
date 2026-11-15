@@ -27,9 +27,10 @@ RustyBGP is my first attempt at a routing protocol written in, you guessed it, R
 -  Handling of route refresh
 -  Other address families (v6 or vpn)
 
-No AI was used to generate any of the code in this project.
+
 
 **Terminal UI**
+
 Route View
 
 <img width="1359" height="725" alt="image" src="https://github.com/user-attachments/assets/39c0e51d-4fb2-4da0-aaf0-0970805f1cb9" />
@@ -48,3 +49,7 @@ Why have an ADJ RIB IN for both the neighbor and the BGP threads? 2 Reasons.
 2. The routes in the BGP ADJ RIB IN are the ones that have been filtered but were not selected as the best paths. This allows me to clearly separate the best routes and be able to quickly promote or recover routes to prefixes. 
 
 ![img.png](img.png)
+
+
+
+No AI was used to generate any of the code in this project.
