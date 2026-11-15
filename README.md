@@ -29,6 +29,15 @@ RustyBGP is my first attempt at a routing protocol written in, you guessed it, R
 
 No AI was used to generate any of the code in this project.
 
+**Terminal UI**
+Route View
+
+<img width="1359" height="725" alt="image" src="https://github.com/user-attachments/assets/39c0e51d-4fb2-4da0-aaf0-0970805f1cb9" />
+
+Log View
+
+<img width="1357" height="734" alt="image" src="https://github.com/user-attachments/assets/a9ddd1e8-3b9d-41f8-be1c-0dbc32d4e16c" />
+
 **Architecture Details**
 
 In the below diagram I show how a route received from a BGP neighbor flows through the various RIBs in this program. 
