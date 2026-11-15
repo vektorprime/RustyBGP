@@ -92,11 +92,11 @@ pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, tcp_channel_tx: 
         let mut neighbor = neighbor_arc.lock().await;
         while let Some(event) = neighbor.events.pop_front() {
             if let Err(e) = neighbor.handle_event(event, &tcp_channel_tx).await {
-                log::info!("Error: Unable to handle event {:#?}, skipping", e);
+                log::error!("Error: Unable to handle initial event {:#?} in run_event_loop, skipping", e);
             }
         }
     }
-    // neighbors should be up now so we can move  into task
+    // neighbors should be up now so we can move into task
     tokio::spawn( async move {
         let mut watcher = rx_event_channel_watcher;
         loop {
@@ -104,7 +104,7 @@ pub async fn run_event_loop(neighbor_arc: Arc<Mutex<Neighbor>>, tcp_channel_tx: 
                 let mut neighbor = neighbor_arc.lock().await;
                 while let Some(event) = neighbor.events.pop_front() {
                     if let Err(e) = neighbor.handle_event(event, &tcp_channel_tx).await {
-                        log::info!("Error: Unable to handle event {:#?}, skipping", e);
+                        log::error!("Error: Unable to handle new event {:#?} for up neighbors in run_event_loop, skipping", e);
                     }
                 }
             }
@@ -1297,7 +1297,7 @@ impl Neighbor {
             Some(tx) => {
                 // TODO handle different channel errors here
                 if let Err(e) = tx.try_send(ChannelWatcherMessage::MessageWaiting) {
-                    log::info!("ERROR in generate_event - {:#?}", e);
+                    log::error!("ERROR in generate_event - {:#?}", e);
                     return Err(BGPError::Channel(ChannelError::Unknown));
                 }
 
@@ -1349,7 +1349,7 @@ impl Neighbor {
     }
 
     pub async fn recv_routes_from_bgp_proc(&mut self) {
-        while let Ok(ChannelMessage::Route(route)) = self.proc_channel.rx.try_recv() {
+        while let Ok(BGPChannelMessage::Route(route)) = self.proc_channel.rx.try_recv() {
             self.insert_routes_in_adj_rib_out(route);
         }
     }
