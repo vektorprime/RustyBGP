@@ -2,6 +2,8 @@ RustyBGP is my first attempt at a routing protocol written in, you guessed it, R
 
 This is currently **NOT** production ready.
 
+No AI was used to generate any of the code in this project.
+
 **What is implemented:**
 
 - Processing of the following BGP messages: Open, Keepalive, Updates
