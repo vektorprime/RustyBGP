@@ -9,8 +9,9 @@ use crate::routes::*;
 //used to handle the toml configurations
 
 pub fn read_config_file(file_name: &str) -> Config {
-    let toml_content = fs::read_to_string(file_name).unwrap();
-    let config: Config = toml::from_str(&toml_content).unwrap();
+    let toml_content = fs::read_to_string(file_name).expect("Unable to read the config file string name");
+    let config: Config = toml::from_str(&toml_content)
+        .expect("Unable to find bgp_config.toml in this directory, please fix it and relaunch the program.");
     config
 
 }
