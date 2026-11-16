@@ -17,19 +17,21 @@ RustyBGP is my first attempt at a routing protocol written in, you guessed it, R
 
 **What's in progress:**
 
--  Console commands for displaying routes
+-  Console commands for displaying routes (in tui branch)
 -  Route filtering (inbound and outbound)
+-  GUI (in tui branch)
 
 
 **What isn't implemented yet:**
--  GUI
 -  Processing of BGP Notification
 -  Handling of route refresh
 -  Other address families (v6 or vpn)
 
 No AI was used to generate any of the code in this project.
 
-**Architecture Details**
+# Architecture Details
+
+## Local Rib
 
 In the below diagram I show how a route received from a BGP neighbor flows through the various RIBs in this program. 
 
@@ -38,4 +40,10 @@ Why have an ADJ RIB IN for both the neighbor and the BGP threads? 2 Reasons.
 1. In the future, I will do the inbound and outbound route filtering at the neighbors. 
 2. The routes in the BGP ADJ RIB IN are the ones that have been filtered but were not selected as the best paths. This allows me to clearly separate the best routes and be able to quickly promote or recover routes to prefixes. 
 
-![img.png](img.png)
+![img.png](img/arch-local-rib.png)
+
+## BGP FSM
+
+I created the below diagram based on what I read from BGP RFC 4271 because there were some, what I felt were, inconsistencies. The most notable one was skipping Open Sent and going directly to Open Confirm. I didn't see any diagrams that showed going from Active or Connect to Open Confirm. Granted, you have to send the Open and Keepalive, but you still don't really transition into the Open Sent state, you skip it and go directly to Open Confirm. At least, that's what I recall the RFC stating when I made the diagram several months ago.
+
+![img.png](img/arch-bgp-fsm.png)
