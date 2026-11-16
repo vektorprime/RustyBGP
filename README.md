@@ -1,5 +1,7 @@
 RustyBGP is my first attempt at a routing protocol written in, you guessed it, Rust.
 
+This is currently **NOT** production ready.
+
 **What is implemented:**
 
 - Processing of the following BGP messages: Open, Keepalive, Updates
@@ -23,6 +25,7 @@ RustyBGP is my first attempt at a routing protocol written in, you guessed it, R
 
 
 **What isn't implemented yet:**
+
 -  Processing of BGP Notification
 -  Handling of route refresh
 -  Other address families (v6 or vpn)
@@ -31,7 +34,7 @@ No AI was used to generate any of the code in this project.
 
 # Architecture Details
 
-## Local Rib
+## Local RIB
 
 In the below diagram I show how a route received from a BGP neighbor flows through the various RIBs in this program. 
 
