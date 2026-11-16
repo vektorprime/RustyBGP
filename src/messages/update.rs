@@ -1165,7 +1165,6 @@ pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut
         //log::info!("returning NLRI vec");
         Ok(Some(nlri))
     }
-
 }
 
 // pub fn extract_nlri_from_update_message(tsbuf: &Vec<u8>, message_len: usize, mut current_idx: &mut usize) -> Option<Vec<NLRI>> {
