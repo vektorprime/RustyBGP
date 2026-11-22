@@ -9,35 +9,35 @@ use crate::utils::extract_u16_from_bytes;
 
 pub fn handle_route_refresh_message(tcp_stream: &mut TcpStream, tsbuf: &Vec<u8>) -> Result<(), MessageError> {
     //send_route_refresh(tcp_stream);
-    println!("Handling route refresh message");
+    log::info!("Handling route refresh message");
     // TODO handle route refresh
     match tsbuf.get(19..21) {
         Some(ts) => {
             let afi = extract_u16_from_bytes(tsbuf, 0, 2)?;
             if afi == 1 {
-                println!("Received route refresh for IPv4 AFI");
+                log::info!("Received route refresh for IPv4 AFI");
             }
             else if afi == 1 {
-                println!("Received route refresh for IPv4 AFI");
+                log::info!("Received route refresh for IPv4 AFI");
             }
         },
         None => {
-            println!("No AFI found in route refresh message");
+            log::info!("No AFI found in route refresh message");
             return Err(MessageError::RouteRefreshMissingAFI)
         }
     }
     // readv the adj rib out for the afi, safi pair
-    println!("Handled route refresh message");
+    log::info!("Handled route refresh message");
     Ok(())
 }
 
 pub async fn send_route_refresh(stream: &mut TcpStream, afi: AddressFamily, safi: SAFI) -> Result<(), MessageError> {
     // TODO
-    println!("Preparing to send RouteRefresh");
+    log::info!("Preparing to send RouteRefresh");
     let message = RouteRefreshMessage::new(afi, safi)?;
     let message_bytes = message.convert_to_bytes();
     stream.write_all(&message_bytes[..]).await.unwrap();
-    println!("Sent RouteRefresh");
+    log::info!("Sent RouteRefresh");
     Ok(())
 }
 

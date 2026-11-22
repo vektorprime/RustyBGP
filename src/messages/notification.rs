@@ -235,7 +235,7 @@ impl NotificationMessage {
 
 
 pub fn extract_notification_message(tsbuf: &Vec<u8>) -> Result<NotificationMessage, MessageError> {
-    println!("Extracting notification message");
+    log::info!("Extracting notification message");
     let message_len = extract_u16_from_bytes(tsbuf, 16, 18)?;
     if message_len < 21 {
         return Err(MessageError::MessageLenTooLow)
@@ -246,7 +246,7 @@ pub fn extract_notification_message(tsbuf: &Vec<u8>) -> Result<NotificationMessa
     let error_code = match tsbuf.get(current_idx) {
         Some(ec) => {
             current_idx += 1;
-            //println!("error_code Some(ec) is  {:#?}", ec);
+            //log::info!("error_code Some(ec) is  {:#?}", ec);
             NotifErrorCode::try_from(*ec)?
         },
         None => { return Err(MessageError::BadNotifErrorCode) }
@@ -254,7 +254,7 @@ pub fn extract_notification_message(tsbuf: &Vec<u8>) -> Result<NotificationMessa
 
     let error_subcode = match tsbuf.get(current_idx) {
         Some(esc) => {
-            //println!("error_subcode Some(esc) is  {:#?}", esc);
+            //log::info!("error_subcode Some(esc) is  {:#?}", esc);
             current_idx += 1;
             match error_code {
                 NotifErrorCode::MessageHeader => {

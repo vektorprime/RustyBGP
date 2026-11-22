@@ -10,6 +10,8 @@ use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::Mutex;
 use tokio::sync::{mpsc, broadcast};
 use tokio::sync::mpsc::{Receiver, Sender};
+use anyhow::{Result, Error};
+
 use crate::config::*;
 use crate::errors::*;
 use crate::finite_state_machine::events::Event;
@@ -17,7 +19,7 @@ use crate::messages::BGPVersion;
 use crate::utils::*;
 use crate::messages::update::AS::AS4;
 use crate::{neighbors, process};
-use crate::channels::{ChannelWatcherMessage, ChannelMessage, NeighborChannel};
+use crate::channels::{ChannelWatcherMessage, BGPChannelMessage, NeighborChannel};
 use crate::errors::ProcessError::CannotCompareAS2vsAS4;
 use crate::messages::update::{AsPath, AsPathSegment, AsPathSegmentType, LocalPref, NextHop, Origin, OriginType, AS};
 use crate::neighbors::{Neighbor, PeerType};
@@ -28,7 +30,8 @@ async fn start_tcp(address: String, port: String) -> TcpListener {
     let listener = TcpListener::bind(address + ":" + &port).await;
     match listener {
         Ok(tcp) => {
-            println!("TCP server started on port {} ", port);
+            //println!("TCP server started on port {} ", port);
+            log::info!("TCP server started on port {} ", port);
             tcp
         },
         Err(e) => {
@@ -56,9 +59,9 @@ enum BestPathResult {
     Tie,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RIB {
-    routes: HashMap<NLRI, Vec<RouteV4>>,
+    pub routes: HashMap<NLRI, Vec<RouteV4>>,
     pub has_updates: bool,
 }
 
@@ -79,9 +82,9 @@ pub struct BGPProcess {
     pub configured_networks: Vec<NetAdvertisementsConfig>,
     // TODO changes to loc-rib generate events to all neighbors to send update
     pub adj_rib_in: RIB,
-    pub local_rib: RIB,
+    pub local_rib: RIB
 
-    //pub neighbors_channels: HashMap<Ipv4Addr, NeighborChannel>, // moved to it's own var so we can lock it separately from the bgp proc
+    //pub neighbors_channels: HashMap<Ipv4Addr, NeighborChannel>, // moved to its own var so we can lock it separately from the bgp proc
 }
 
 impl BGPProcess {
@@ -214,7 +217,8 @@ impl BGPProcess {
         for cn in &self.configured_neighbors {
             // TODO refactor string comparison out as it's inefficient
             if peer_ip.to_string() == cn.ip {
-                 println!("Validated neighbor IP is in configured neighbors");
+                 //println!("Validated neighbor IP is in configured neighbors");
+                log::info!("Validated neighbor IP is in configured neighbors");
                 return Ok(())
             }
             else {
@@ -244,8 +248,10 @@ impl BGPProcess {
 
     fn populate_local_rib_from_config(&mut self) {
         for configured_network in &self.configured_networks {
-            println!("populating local rib from config");
-            println!("configured_network is {:#?}", configured_network);
+            // println!("populating local rib from config");
+            // println!("configured_network is {:#?}", configured_network);
+            log::info!("populating local rib from config");
+            log::info!("configured_network is {:#?}", configured_network);
             let nlri = configured_network.nlri.clone();
             let origin = Origin::new(OriginType::IGP);
             let as_path = self.generate_local_as_path_for_advertisement();
@@ -261,10 +267,10 @@ impl BGPProcess {
         }
     }
 
-     async fn populate_local_rib_from_config_arc(bgp_proc_arc: &Arc<Mutex<BGPProcess>>) {
-         let mut bgp_proc = bgp_proc_arc.lock().await;
-         bgp_proc.populate_local_rib_from_config();
-     }
+     // async fn populate_local_rib_from_config_arc(bgp_proc_arc: &Arc<Mutex<BGPProcess>>) {
+     //     let mut bgp_proc = bgp_proc_arc.lock().await;
+     //     bgp_proc.populate_local_rib_from_config();
+     // }
 
 
     pub fn init_process_channels() -> Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>> {
@@ -272,17 +278,19 @@ impl BGPProcess {
         Arc::new(Mutex::new(all_neighbors_channels))
     }
 
-    pub async fn run_process_loop(bgp_proc: Arc<Mutex<BGPProcess>>, address: &str, port: &str) {
+    pub async fn run_process_loop(bgp_proc: Arc<Mutex<BGPProcess>>, address: &str, port: &str, tx_tui: Sender<RIB>) {
         let bgp_proc_arc = Arc::clone(&bgp_proc);
         // init
-        BGPProcess::populate_local_rib_from_config_arc(&bgp_proc_arc).await;
+        //BGPProcess::populate_local_rib_from_config_arc(&bgp_proc_arc).await;
+        bgp_proc_arc.lock().await.populate_local_rib_from_config();
         // these are the channels we'll use to send and receive messages between proc and neighbors
-        // we'll create 2 2-way channels for each neighbor and we'll send 1 2-way channel to the neighbor and the other in this HashMap
+        // we'll create 2 2-way channels for each neighbor, and we'll send 1 2-way channel to the neighbor and the other in this HashMap
         let all_neighbors_channels_arc = BGPProcess::init_process_channels();
         let (tx_channel_watcher, rx_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(10);
         // let (tx_all_event_channel_watcher, rx_all_event_channel_watcher) = broadcast::channel::<ChannelWatcherMessage>(1);
         let mut all_neighbors = BGPProcess::populate_neighbors_from_config(&bgp_proc, &all_neighbors_channels_arc, tx_channel_watcher).await;
-        BGPProcess::run_recv_message_channel_loop(Arc::clone(&bgp_proc), Arc::clone(&all_neighbors_channels_arc), rx_channel_watcher).await;
+        let (tx_tui_channel_watcher, rx_tui_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(10);
+        BGPProcess::run_recv_message_channel_loop(Arc::clone(&bgp_proc), Arc::clone(&all_neighbors_channels_arc), rx_channel_watcher, tx_tui.clone(), tx_tui_channel_watcher).await;
         BGPProcess::generate_event_for_all_neighbors(&mut all_neighbors, Event::AutomaticStartWithPassiveTcpEstablishment).await;
         // end init
 
@@ -293,18 +301,21 @@ impl BGPProcess {
             // TODO generate events here for for overall process (also do it in neighbor run)
             match listener.accept().await {
                 Ok((mut tcp_stream, sa)) => {
-                    println!("TCP connection established from {}", sa.ip().to_string());
+                    //println!("TCP connection established from {}", sa.ip().to_string());
+                   log::info!("TCP connection established from {}", sa.ip().to_string());
                     let peer_ip = match get_neighbor_ipv4_address_from_socket(tcp_stream.peer_addr()) {
                         Ok(ip) => ip,
                         Err(e) => {
-                            println!("Error: TCP Socket error -  {:#?}, skipping", e);
+                            //println!("Error: TCP Socket error -  {:#?}, skipping", e);
+                            log::error!("Error: TCP Socket error -  {:#?}, skipping", e);
                             continue;
                         }
                     };
                     {
                         let bgp  = bgp_proc_arc.lock().await;
                         if let Err(e) = bgp.validate_neighbor_ip_is_configured(peer_ip) {
-                            println!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
+                            // println!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
+                            log::error!("Error: Unable to validate neighbor IP: {:#?}, skipping", e);
                             continue;
                         }
                     }
@@ -314,36 +325,47 @@ impl BGPProcess {
                         Some(n) => n,
                         None => {
                             // TODO split the first connection vs resuming/passing a new connection to neighbor into two different funcs
-                            println!("Unable to get neighbor object from all_neighbors, which means the neighbor loop is already running");
+                            //println!();
+                            log::info!("Unable to get neighbor object from all_neighbors, which means the neighbor loop is already running");
                             {
                                 let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
-                                println!("unlocked all_neighbors_channels_arc");
+                                //println!("unlocked all_neighbors_channels_arc");
+                                log::info!("unlocked all_neighbors_channels_arc");
                                 if let Some(neighbor_channel) =  all_neighbors_channels.get_mut(&peer_ip) {
-                                    println!("Got Some(neighbor_channel)");
+                                    //println!("Got Some(neighbor_channel)");
+                                    log::info!("Got Some(neighbor_channel)");
                                     match neighbor_channel.send_tcp_conn_to_neighbor(tcp_stream) {
-                                        Ok(_) => {println!("Sent TCP connection in neighbor channel")}
-                                        Err(e) => {println!("ERROR: Unable to send TCP connection in channel - {:#?}", e)}
+                                        Ok(_) => {
+                                            //println!("Sent TCP connection in neighbor channel")
+                                            log::info!("Sent TCP connection in neighbor channel");
+                                        }
+                                        Err(e) => {
+                                            //println!("ERROR: Unable to send TCP connection in channel - {:#?}", e)
+                                            log::error!("Unable to send TCP connection in channel - {:#?}", e);
+                                        }
                                     }
                                 }
                             }
                             continue;
                         }
                     };
-                    println!("Extracted neighbor from hashmap");
-                    let (tx_event_channel_watcher, rx_event_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(5);
+                    //println!("Extracted neighbor from hashmap");
+                    log::info!("Extracted neighbor from hashmap");
+                    let (tx_event_channel_watcher, rx_event_channel_watcher) = mpsc::channel::<ChannelWatcherMessage>(100);
                     neighbor.tx_event_channel_watcher = Some(tx_event_channel_watcher);
                     neighbor.generate_event(Event::TcpCRAcked);
-                    println!("Generated Event::TcpCRAcked");
+                   // println!("Generated Event::TcpCRAcked");
+                    log::info!("Generated Event::TcpCRAcked");
                     tokio::spawn(async move {
-                        println!("Moving neighbor to async task and executing run_neighbor_loop");
+                        log::info!("Moving neighbor to async task and executing run_neighbor_loop");
                         // get the neighbor and pass the tcp conn
                         if let Err(e) = neighbors::run_neighbor_loop(tcp_stream, neighbor, peer_ip, rx_event_channel_watcher).await {
-                            println!("Error: Unable to continue run() for neighbor {:#?} - {:#?}", peer_ip, e);
+                            log::error!("Unable to continue run() for neighbor {:#?} - {:#?}", peer_ip, e);
                         }
                     });
                 },
                 Err(e) => {
-                    println!("Error: TCP Stream {:#?}", e);
+                    log::error!("TCP Stream {:#?}", e);
                 }
             }
         }
@@ -359,55 +381,55 @@ impl BGPProcess {
         let global_settings = bgp_proc.global_settings.clone();
         for nc in &bgp_proc.configured_neighbors {
             match Ipv4Addr::from_str(&nc.ip) {
-                Ok(ip) => {
+                Ok(peer_ip) => {
                     let peer_type = if my_as == nc.as_num {
                         PeerType::Internal
                     } else {
                         PeerType::External
                     };
-                    let (tx_to_bgp, rx_from_neighbor)  = mpsc::channel::<ChannelMessage>(65535);
-                    let (tx_to_neighbor, rx_from_bgp) = mpsc::channel::<ChannelMessage>(65535);
+                    let (tx_to_bgp, rx_from_neighbor)  = mpsc::channel::<BGPChannelMessage>(65535);
+                    let (tx_to_neighbor, rx_from_bgp) = mpsc::channel::<BGPChannelMessage>(65535);
                     let neighbors_channel = NeighborChannel {
                         rx: rx_from_neighbor,
-                        tx: tx_to_neighbor
+                        tx: tx_to_neighbor,
+                        peer_ip
                         //is_active: true
                     };
                     let bgp_channel = NeighborChannel {
                         rx: rx_from_bgp,
-                        tx: tx_to_bgp
+                        tx: tx_to_bgp,
+                        peer_ip
                         //is_active: true,
                     };
                     // need to use a temp HashMap because we already borrowed bgp_proc as mutable
                     {
                         let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
-                        all_neighbors_channels.insert(ip, neighbors_channel);
+                        all_neighbors_channels.insert(peer_ip, neighbors_channel);
                     }
 
-                    match Neighbor::new(ip, AS::AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings.clone(), bgp_channel, tx_channel_watcher.clone()) {
+                    match Neighbor::new(peer_ip, AS::AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings.clone(), bgp_channel, tx_channel_watcher.clone()) {
                         Ok(neighbor) => {
-                            all_neighbors.insert(ip, neighbor);
+                            all_neighbors.insert(peer_ip, neighbor);
                         },
                         Err(e) => {
-                            println!("Error: Unable to create neighbor (IP) {:#?} from Config, ERROR: {:#?}", ip, e);
+                            log::error!("Unable to create neighbor (IP) {:#?} from Config, ERROR: {:#?}", peer_ip, e);
                         }
                     }
                 },
                 Err(_) => {
-                    println!("Error: Unable to convert config string to IP, skipping");
+                    log::error!("Unable to convert config string to IP, skipping");
                     continue;
                 }
             }
         }
-        println!();
-        println!("Populated the following BGP neighbors from config {:#?}", all_neighbors);
-        println!();
+        //println!("Populated the following BGP neighbors from config {:#?}", all_neighbors);
 
         all_neighbors
     }
 
 
     pub async fn generate_event_for_all_neighbors(all_neighbors: &mut HashMap<Ipv4Addr, Neighbor>, event: Event) {
-        println!("Generating event {:#?} for all neighbors", event);
+        log::info!("Generating event {:#?} for all neighbors", event);
         for n in all_neighbors {
             n.1.events.push_back(event.clone());
         }
@@ -456,7 +478,7 @@ impl BGPProcess {
         // if learned from ebgp peer
         //  use the default local pref configured
 
-        println!("comparing route local pref");
+        log::info!("comparing route local pref");
 
         let candidate_path_local_pref = if candidate_best_path.local_pref.is_some() {
             candidate_best_path.local_pref.as_ref().unwrap().value }
@@ -598,18 +620,41 @@ impl BGPProcess {
     }
 
     pub async fn send_local_rib_routes_to_neighbors(bgp_proc_arc: &Arc<Mutex<BGPProcess>>, all_neighbors_channels_arc: &Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>) {
-        let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
+        //let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
         // TODO need a mechanism for only active neighbors so I don't waste CPU cycles
-        println!("Sending routes from proc to all neighbors via NeighborChannel");
-        let bgp_proc = bgp_proc_arc.lock().await;
-        for (_, route_channel) in &mut *all_neighbors_channels {
-            for (_, route_vec) in &bgp_proc.local_rib.routes {
-                route_channel.send_route_vec(&route_vec).await;
+        log::info!("Sending routes from proc to all neighbors via NeighborChannel");
+        //let bgp_proc = bgp_proc_arc.lock().await;
+
+        for (_, route_channel) in &mut *all_neighbors_channels_arc.lock().await {
+            //log::info!("all_neighbors_channels_arc unlocked");
+            let mut routes_for_neighbor: Vec<RouteV4> = Vec::new();
+            for (_, route_vec) in &bgp_proc_arc.lock().await.local_rib.routes {
+                //log::info!("Bgp_proc unlocked");
+                for rt in route_vec {
+                    if let Some(peer_ip) = rt.peer_ip {
+                        // Don't send the route to the same neighbor that sent it to us
+                        if route_channel.peer_ip != peer_ip {
+                            log::info!("Adding route for prefix {}/{} to routes_for_neighbor vec", rt.nlri.prefix, rt.nlri.len);
+                            routes_for_neighbor.push(rt.clone());
+                        }
+                        //log::info!("route_channel.send_route_vec complete");
+                    }
+                }
+            }
+            if !routes_for_neighbor.is_empty() {
+                log::info!("Sending routes_for_neighbor vec to neighbor {}", route_channel.peer_ip);
+                route_channel.send_route_vec(&routes_for_neighbor).await;
             }
         }
+        log::info!("send_local_rib_routes_to_neighbors complete");
+
     }
 
-    pub async fn run_recv_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>, mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>, rx_channel_watcher: Receiver<ChannelWatcherMessage>) {
+    pub async fn run_recv_message_channel_loop(bgp_proc_arc: Arc<Mutex<BGPProcess>>,
+                                               mut all_neighbors_channels_arc: Arc<Mutex<HashMap<Ipv4Addr, NeighborChannel>>>,
+                                               rx_channel_watcher: Receiver<ChannelWatcherMessage>,
+                                               tx_tui: Sender<RIB>,
+                                                tx_tui_channel_watcher: Sender<ChannelWatcherMessage>) {
         // TODO need to refactor this so we don't loop to unlock the all_neighbors_channels_arc
         // maybe pass a MessageReady event that we await on
         // when at least one neighbor has a message, resume the task
@@ -617,12 +662,14 @@ impl BGPProcess {
             let mut watcher = rx_channel_watcher;
             //let mut path_changed = false;
             let mut routes_pending_best_path_calc: Vec<NLRI> = Vec::new();
+            let mut pending_tui_channel = false;
             loop {
                 if !routes_pending_best_path_calc.is_empty() {
                     // TODO calculate best path if path changed
                     // go through every nlri and find the best attributes
-                    let mut bgp_proc = bgp_proc_arc.lock().await;
+
                     while let Some(rt) = routes_pending_best_path_calc.pop() {
+                        let mut bgp_proc = bgp_proc_arc.lock().await;
                         // I keep routes in adj rin in too because if the best path goes away I have the filtered backup paths here
                         if let Some(all_paths_for_rt) = bgp_proc.adj_rib_in.routes.get(&rt) {
                             let mut best_path: Option<RouteV4> = None;
@@ -643,12 +690,12 @@ impl BGPProcess {
                                             match BGPProcess::is_my_asn_in_ebgp_path(my_asn, &candidate_path) {
                                                 Ok(result) => {
                                                     if result {
-                                                        println!("eBGP route has our ASN in path, skipping");
+                                                        log::warn!("eBGP route has our ASN in path, skipping");
                                                         continue;
                                                     }
                                                 },
                                                 Err (err) => {
-                                                    println!("ERROR: {:#?} -Unable to check if our ASN in eBGP path, skipping", err);
+                                                    log::error!("{:#?} -Unable to check if our ASN in eBGP path, skipping", err);
                                                     continue;
                                                 }
                                             }
@@ -667,8 +714,7 @@ impl BGPProcess {
                                                 best_path = Some(curr_best_path.clone());
                                             },
                                             BestPathResult::Tie => {
-                                                println!("A tie has occurred at the end of BGPProcess::choose_best_path. This should not be possible with valid routes and correct code.");
-                                                println!("Skipping candidate path.");
+                                                log::info!("A tie has occurred at the end of BGPProcess::choose_best_path. This should not be possible with valid routes and correct code. Skipping candidate path.");
                                                 continue;
                                             }
                                         }
@@ -697,17 +743,31 @@ impl BGPProcess {
                     //println!("END BGP LOCAL RIB");
                     // At this point I have chosen the best path for a prefix and I should send that to the neighbors
                     BGPProcess::send_local_rib_routes_to_neighbors(&bgp_proc_arc, &all_neighbors_channels_arc).await;
+                    pending_tui_channel = true;
                 }
+                if pending_tui_channel {
+                    log::info!("pending_tui_channel is true, sending RIB");
+                    // TODO this works fine but it deviates from my ChannelWatcher approach, not sure if I want to change it
+                    //tx_tui_channel_watcher.try_send(ChannelWatcherMessage::MessageWaiting);
+                    let bgp = bgp_proc_arc.lock().await;
+                    if let Err(e) = tx_tui.try_send(bgp.local_rib.clone()) {
+                        log::error!("tx_tui.try_send - {e}");
+                    }
+                    pending_tui_channel = false;
+                }
+
+
 
                 // TODO Wow, I made this func way too long, need to break it up
 
                 if let Some(ChannelWatcherMessage::MessageWaiting) = watcher.recv().await {
+                    log::info!("watcher.recv() returned Some(ChannelWatcherMessage::MessageWaiting)");
                     let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
                     // TODO check the channel and unlock the bgp Arc Mutex if we need to modify the loc_rib
                     for (neighbor_ip, route_channel) in &mut *all_neighbors_channels {
                         while let Ok(msg) = route_channel.rx.try_recv() {
                             match msg {
-                                ChannelMessage::Route(new_route) => {
+                                BGPChannelMessage::Route(new_route) => {
                                     // if an entry for the NLRI exists, add the route path too it don't overwrite
                                     {
                                         let new_nlri = new_route.nlri.clone();
@@ -719,23 +779,23 @@ impl BGPProcess {
                                             Some(route_paths) => {
                                                 // don't add an exact matching route because it's most likely just being acked
                                                 // it only wastes CPU cycles
-                                                println!("new_route is {:#?}", new_route.nlri);
+                                                log::info!("new_route is {:#?}", new_route.nlri);
                                                 if !route_paths.contains(&new_route) {
                                                     route_paths.push(new_route);
                                                 } else {
-                                                    println!("New route is already in BGP ADJ RIB IN")
+                                                    log::info!("New route is already in BGP ADJ RIB IN")
                                                 }
                                             }
                                             None => {
                                                 bgp_proc.adj_rib_in.routes.insert(new_nlri, vec![new_route]);
                                             }
                                         }
-                                        println!("Adding route to BGP ADJ RIB IN");
+                                        log::info!("Adding route to BGP ADJ RIB IN");
                                         //println!("Current BGP ADJ RIB IN is {:#?}", bgp_proc.adj_rib_in);
                                     }
                                     //path_changed = true;
                                 }
-                                ChannelMessage::WithdrawRoute(nlri_vec) => {
+                                BGPChannelMessage::WithdrawRoute(nlri_vec) => {
                                     // TODO I need to come back and rethink the order of operations of withdrawing with local_rib and adj_rib_in because the low level details are not clear
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
                                     for nlri in nlri_vec {
@@ -743,28 +803,28 @@ impl BGPProcess {
                                         // TODO I need to signal this was a withdraw. Possibly remove from local_rib and promote the next available route in the adj rib in.
                                         routes_pending_best_path_calc.push(nlri.clone());
                                         // continue with withdraw
-                                        println!("Removing route from BGP Local RIB");
+                                        log::info!("Removing route from BGP Local RIB");
                                         if let None =  bgp_proc.local_rib.routes.remove(&nlri) {
-                                            println!("Attempted to remove {:#?} from the BGP local RIB but was unable to find the route", nlri);
+                                            log::info!("Attempted to remove {:#?} from the BGP local RIB but was unable to find the route", nlri);
                                         }
                                     }
                                     // TODO trigger sending a withdraw message
-                                    println!("Current BGP Local RIB is {:#?}", bgp_proc.local_rib);
+                                    log::info!("Current BGP Local RIB is {:#?}", bgp_proc.local_rib);
                                     //path_changed = true;
                                 }
                                 // ChannelMessage::NeighborDown => {
                                 //     // prevent the BGP proc from using the TX channel until we get a NeighborUp
                                 // },
-                                ChannelMessage::NeighborUp => {
+                                BGPChannelMessage::NeighborUp => {
                                     // Allow the BGP proc to send messages (routes) to the Neighbor task
                                     let mut bgp_proc = bgp_proc_arc.lock().await;
                                     for (_nlri, route_vec) in &bgp_proc.local_rib.routes {
-                                        println!("Received ChannelMessage::NeighborUp, sending route_vec - {:#?}", route_vec);
+                                        log::info!("Received ChannelMessage::NeighborUp, sending route_vec - {:#?}", route_vec);
                                         route_channel.send_route_vec(route_vec).await;
                                     }
 
                                 },
-                                ChannelMessage::TcpEstablished(tcp_stream) => {
+                                BGPChannelMessage::TcpEstablished(tcp_stream) => {
                                     panic!("We should never get a NeighborChannel::TcpEstablished from Neighbor to BGP proc");
                                 }
                             }

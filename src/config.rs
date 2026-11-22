@@ -83,7 +83,7 @@ impl MultiProtocolExtensionsConfig {
                 mp_ex_config.ipv6_vpn = true;
             },
             (_, _) => {
-                println!("MultiProtocol afi and safi not recognized, defaulting");
+                log::info!("MultiProtocol afi and safi not recognized, defaulting");
             }
 
 
