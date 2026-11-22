@@ -1193,6 +1193,7 @@ impl Neighbor {
                             // } else { false };
 
                             // TODO only send new or changed routes, not all
+                            // TODO use the built in update message functions and not this for loop below
                             for (nlri, route) in &self.adj_rib_out {
 
                                 let mut pa_len: u16 = 0;
@@ -1210,24 +1211,19 @@ impl Neighbor {
                                 pa_len += next_hop.pa_data_len;
                                 path_attributes.push(next_hop);
 
-                                // match self.peer_type {
-                                //     PeerType::Internal => {
-                                //         // TODO local pref
-                                //     },
-                                //     PeerType::External => {
-                                //
-                                //     }
-                                //     // TODO MED ,atomic_agregate, aggregator
-                                // }
 
                                 match UpdateMessage::new(None, 0, None, pa_len, Some(path_attributes), Some(vec![route.nlri.clone()]), &self.negotiated_capabilities) {
                                     Ok(message) => {
+                                        if let Some(nlri) = &message.nlri {
+                                            log::info!("Sending update message for prefix {:#?}", nlri);
+                                        }
+
                                         if let Err(e) = send_update(tcp_write_stream, message, &self.negotiated_capabilities).await {
-                                            log::info!("ERROR: Unable to send Update Message to neighbor in State::Established and Event::SendUpdateMsg - {:#?}", e);
+                                            log::error!("ERROR: Unable to send Update Message to neighbor in State::Established and Event::SendUpdateMsg - {:#?}", e);
                                         };
                                     },
                                     Err(e) => {
-                                        log::info!("ERROR: {:#?}", e);
+                                        log::error!("ERROR: {:#?}", e);
                                     }
                                 }
 
@@ -1238,7 +1234,7 @@ impl Neighbor {
 
                     },
                     _ => {
-                        log::info!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
+                        log::error!("Unhandled event in {:?} - {:#?}",self.fsm.state, event);
                         Err(EventError::UnhandledEvent.into())
                     }
                 }
@@ -1303,7 +1299,7 @@ impl Neighbor {
 
                     //.map_err(|e|BGPError::Channel(ChannelError::Unknown))?;
             }
-            None => {log::info!("generate_event failed for {:?}, tx_event_channel_watcher is none", event)}
+            None => {log::error!("generate_event failed for {:?}, tx_event_channel_watcher is none", event)}
         }
         self.events.push_back(event);
         Ok(())
@@ -1343,9 +1339,26 @@ impl Neighbor {
         Ok(())
     }
 
-    pub fn insert_routes_in_adj_rib_out(&mut self, route: RouteV4) {
-        self.adj_rib_out.insert(route.nlri.clone(), route);
-        self.generate_event(Event::SendUpdateMsg);
+    pub fn insert_routes_in_adj_rib_out(&mut self, new_route: RouteV4) {
+        match self.adj_rib_out.get_mut(&new_route.nlri) {
+            Some(found_rt) => {
+                if *found_rt == new_route {
+                    log::info!("Route for prefix {}/{} is already in Neighbor {}'s adj_rib_out, skipping", found_rt.nlri.prefix, found_rt.nlri.len, self.ip);
+                } else {
+                    log::info!("Replacing the route for prefix {}/{} in Neighbor {}'s adj_rib_out", found_rt.nlri.prefix, found_rt.nlri.len, self.ip);
+                    *found_rt = new_route;
+                    log::info!("Generating Event::SendUpdateMsg for Neighbor {}", self.ip);
+                    self.generate_event(Event::SendUpdateMsg);
+                }
+            },
+            None => {
+                log::info!("Adding route for prefix {}/{} in Neighbor {}'s adj_rib_out", new_route.nlri.prefix, new_route.nlri.len, self.ip);
+                self.adj_rib_out.insert(new_route.nlri.clone(), new_route);
+                log::info!("Generating Event::SendUpdateMsg for Neighbor {}", self.ip);
+                self.generate_event(Event::SendUpdateMsg);
+            }
+        }
+
     }
 
     pub async fn recv_routes_from_bgp_proc(&mut self) {
@@ -1524,6 +1537,7 @@ pub async fn run_neighbor_loop(mut tcp_stream: tokio::net::TcpStream, mut neighb
             }
         }
 
+        // non-blocking
         neighbor_arc.lock().await.recv_routes_from_bgp_proc().await;
 
 

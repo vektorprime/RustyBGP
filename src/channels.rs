@@ -1,3 +1,4 @@
+use std::net::Ipv4Addr;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use crate::errors::EventError;
@@ -18,6 +19,7 @@ pub struct NeighborChannelWatcher {
 pub struct NeighborChannel {
     pub tx: mpsc::Sender<BGPChannelMessage>,
     pub rx: mpsc::Receiver<BGPChannelMessage>,
+    pub peer_ip: Ipv4Addr,
 }
 
 // ChannelWatchers are for saving CPU cycles.

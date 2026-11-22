@@ -381,7 +381,7 @@ impl BGPProcess {
         let global_settings = bgp_proc.global_settings.clone();
         for nc in &bgp_proc.configured_neighbors {
             match Ipv4Addr::from_str(&nc.ip) {
-                Ok(ip) => {
+                Ok(peer_ip) => {
                     let peer_type = if my_as == nc.as_num {
                         PeerType::Internal
                     } else {
@@ -391,26 +391,28 @@ impl BGPProcess {
                     let (tx_to_neighbor, rx_from_bgp) = mpsc::channel::<BGPChannelMessage>(65535);
                     let neighbors_channel = NeighborChannel {
                         rx: rx_from_neighbor,
-                        tx: tx_to_neighbor
+                        tx: tx_to_neighbor,
+                        peer_ip
                         //is_active: true
                     };
                     let bgp_channel = NeighborChannel {
                         rx: rx_from_bgp,
-                        tx: tx_to_bgp
+                        tx: tx_to_bgp,
+                        peer_ip
                         //is_active: true,
                     };
                     // need to use a temp HashMap because we already borrowed bgp_proc as mutable
                     {
                         let mut all_neighbors_channels = all_neighbors_channels_arc.lock().await;
-                        all_neighbors_channels.insert(ip, neighbors_channel);
+                        all_neighbors_channels.insert(peer_ip, neighbors_channel);
                     }
 
-                    match Neighbor::new(ip, AS::AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings.clone(), bgp_channel, tx_channel_watcher.clone()) {
+                    match Neighbor::new(peer_ip, AS::AS4(nc.as_num as u32), nc.hello_time, nc.hold_time, peer_type, global_settings.clone(), bgp_channel, tx_channel_watcher.clone()) {
                         Ok(neighbor) => {
-                            all_neighbors.insert(ip, neighbor);
+                            all_neighbors.insert(peer_ip, neighbor);
                         },
                         Err(e) => {
-                            log::error!("Unable to create neighbor (IP) {:#?} from Config, ERROR: {:#?}", ip, e);
+                            log::error!("Unable to create neighbor (IP) {:#?} from Config, ERROR: {:#?}", peer_ip, e);
                         }
                     }
                 },
@@ -625,11 +627,23 @@ impl BGPProcess {
 
         for (_, route_channel) in &mut *all_neighbors_channels_arc.lock().await {
             //log::info!("all_neighbors_channels_arc unlocked");
+            let mut routes_for_neighbor: Vec<RouteV4> = Vec::new();
             for (_, route_vec) in &bgp_proc_arc.lock().await.local_rib.routes {
                 //log::info!("Bgp_proc unlocked");
-                route_channel.send_route_vec(&route_vec).await;
-                //log::info!("route_channel.send_route_vec complete");
-
+                for rt in route_vec {
+                    if let Some(peer_ip) = rt.peer_ip {
+                        // Don't send the route to the same neighbor that sent it to us
+                        if route_channel.peer_ip != peer_ip {
+                            log::info!("Adding route for prefix {}/{} to routes_for_neighbor vec", rt.nlri.prefix, rt.nlri.len);
+                            routes_for_neighbor.push(rt.clone());
+                        }
+                        //log::info!("route_channel.send_route_vec complete");
+                    }
+                }
+            }
+            if !routes_for_neighbor.is_empty() {
+                log::info!("Sending routes_for_neighbor vec to neighbor {}", route_channel.peer_ip);
+                route_channel.send_route_vec(&routes_for_neighbor).await;
             }
         }
         log::info!("send_local_rib_routes_to_neighbors complete");
@@ -728,7 +742,6 @@ impl BGPProcess {
                     //println!("{:?}", bgp_proc.local_rib);
                     //println!("END BGP LOCAL RIB");
                     // At this point I have chosen the best path for a prefix and I should send that to the neighbors
-                    // TODO don't send the route to the same neighbor that sent it to us
                     BGPProcess::send_local_rib_routes_to_neighbors(&bgp_proc_arc, &all_neighbors_channels_arc).await;
                     pending_tui_channel = true;
                 }
