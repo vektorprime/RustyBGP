@@ -728,6 +728,7 @@ impl BGPProcess {
                     //println!("{:?}", bgp_proc.local_rib);
                     //println!("END BGP LOCAL RIB");
                     // At this point I have chosen the best path for a prefix and I should send that to the neighbors
+                    // TODO don't send the route to the same neighbor that sent it to us
                     BGPProcess::send_local_rib_routes_to_neighbors(&bgp_proc_arc, &all_neighbors_channels_arc).await;
                     pending_tui_channel = true;
                 }
